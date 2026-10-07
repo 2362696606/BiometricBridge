@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BiometricBridge", "BiometricBridge\BiometricBridge.csproj", "{931447F7-54F5-4C1F-A5D8-27FF06632370}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BiometricBridge.Android", "BiometricBridge.Android\BiometricBridge.Android.csproj", "{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BiometricBridge.Desktop", "BiometricBridge.Desktop\BiometricBridge.Desktop.csproj", "{258E1A60-95B3-449C-AED2-1CA6FE07139F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BiometricBridge.Browser", "BiometricBridge.Browser\BiometricBridge.Browser.csproj", "{B76C289F-2347-4301-B51D-3C13F5D6AA45}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{931447F7-54F5-4C1F-A5D8-27FF06632370}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{931447F7-54F5-4C1F-A5D8-27FF06632370}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{931447F7-54F5-4C1F-A5D8-27FF06632370}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{931447F7-54F5-4C1F-A5D8-27FF06632370}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3E7504E2-8BB3-4805-85DD-2ED97AA233A2}.Release|Any CPU.Deploy.0 = Release|Any CPU
+		{258E1A60-95B3-449C-AED2-1CA6FE07139F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{258E1A60-95B3-449C-AED2-1CA6FE07139F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{258E1A60-95B3-449C-AED2-1CA6FE07139F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{258E1A60-95B3-449C-AED2-1CA6FE07139F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B76C289F-2347-4301-B51D-3C13F5D6AA45}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B76C289F-2347-4301-B51D-3C13F5D6AA45}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B76C289F-2347-4301-B51D-3C13F5D6AA45}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B76C289F-2347-4301-B51D-3C13F5D6AA45}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,11 @@
+﻿<Solution>
+  <Project Path="BiometricBridge.Android/BiometricBridge.Android.csproj">
+    <Deploy />
+  </Project>
+  <Project Path="BiometricBridge.Browser/BiometricBridge.Browser.csproj" />
+  <Project Path="BiometricBridge.Desktop/BiometricBridge.Desktop.csproj" />
+  <Project Path="BiometricBridge.iOS/BiometricBridge.iOS.csproj">
+    <Deploy />
+  </Project>
+  <Project Path="BiometricBridge/BiometricBridge.csproj" />
+</Solution>
