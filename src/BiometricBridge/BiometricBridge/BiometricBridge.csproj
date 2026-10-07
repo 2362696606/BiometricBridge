@@ -18,5 +18,37 @@
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
         </PackageReference>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
+        <PackageReference Include="Irihi.Ursa.Themes.Semi" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" />
+        <PackageReference Include="Microsoft.Extensions.Options" />
+        <PackageReference Include="NetEscapades.Configuration.Yaml" />
+        <PackageReference Include="Prism.DryIoc.Avalonia" />
+        <PackageReference Include="Semi.Avalonia" />
+        <PackageReference Include="Serilog" />
+        <PackageReference Include="Serilog.Enrichers.Environment" />
+        <PackageReference Include="Serilog.Enrichers.Process" />
+        <PackageReference Include="Serilog.Enrichers.Thread" />
+        <PackageReference Include="Serilog.Formatting.Compact" />
+        <PackageReference Include="Serilog.Settings.Configuration" />
+        <PackageReference Include="Serilog.Sinks.Async" />
+        <PackageReference Include="Serilog.Sinks.Console" />
+        <PackageReference Include="Serilog.Sinks.File" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
+      <ProjectReference Include="..\BiometricBridge.Device\BiometricBridge.Device.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="Extensions\" />
+      <Folder Include="ViewModels\Vms\" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="Configs\serilog.yaml" />
+      <Resource Include="Configs\serilog.yaml">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Resource>
     </ItemGroup>
 </Project>

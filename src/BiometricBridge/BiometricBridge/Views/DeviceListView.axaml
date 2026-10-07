@@ -1,0 +1,76 @@
+<UserControl
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    mc:Ignorable="d"
+    mvvm:ViewModelLocator.AutoWireViewModel="True"
+    x:Class="BiometricBridge.Views.DeviceListView"
+    x:DataType="viewModels:DeviceListViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:mvvm="http://prismlibrary.com/"
+    xmlns:viewModels="clr-namespace:BiometricBridge.ViewModels"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ListBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDeviceItem}">
+        <ListBox.ItemTemplate>
+            <DataTemplate DataType="viewModels:DeviceInfoItemViewModel">
+                <!--  悬停时展示全部字段  -->
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                    <ToolTip.Tip>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="{Binding DeviceId, StringFormat='DeviceId：{0}'}" />
+                            <TextBlock Text="{Binding Status, StringFormat='状态：{0}'}" />
+                            <TextBlock Text="{Binding Make, StringFormat='厂商：{0}'}" />
+                            <TextBlock Text="{Binding Model, StringFormat='型号：{0}'}" />
+                            <TextBlock Text="{Binding DeviceProvider, StringFormat='供应商：{0}'}" />
+                            <TextBlock Text="{Binding DeviceProviderId, StringFormat='供应商标识：{0}'}" />
+                            <TextBlock Text="{Binding DeviceSubIdsText, StringFormat='设备子 ID：{0}'}" />
+                            <TextBlock Text="{Binding DeviceSubType, StringFormat='子类型：{0}'}" />
+                            <TextBlock Text="{Binding Certification, StringFormat='认证等级：{0}'}" />
+                            <TextBlock Text="{Binding Purpose, StringFormat='用途：{0}'}" />
+                            <TextBlock Text="{Binding Modality, StringFormat='模态：{0}'}" />
+                            <TextBlock Text="{Binding SerialNo, StringFormat='SN：{0}'}" />
+                        </StackPanel>
+                    </ToolTip.Tip>
+
+                    <!--  关键信息：DeviceId 与 Status 着重显示  -->
+                    <TextBlock
+                        FontFamily="Consolas"
+                        FontSize="15"
+                        FontWeight="Bold"
+                        Grid.Column="0"
+                        Grid.Row="0"
+                        Text="{Binding DeviceId}"
+                        TextTrimming="CharacterEllipsis" />
+                    <Border
+                        Background="#3B82F6"
+                        CornerRadius="4"
+                        Grid.Column="1"
+                        Grid.Row="0"
+                        Margin="8,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center">
+                        <TextBlock
+                            FontWeight="SemiBold"
+                            Foreground="White"
+                            Text="{Binding Status}" />
+                    </Border>
+
+                    <!--  标志性字段  -->
+                    <StackPanel
+                        Grid.Column="0"
+                        Grid.ColumnSpan="2"
+                        Grid.Row="1"
+                        Margin="0,4,0,0"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <TextBlock Foreground="Gray" Text="{Binding Make}" />
+                        <TextBlock Foreground="Gray" Text="{Binding Model}" />
+                        <TextBlock Foreground="Gray" Text="{Binding SerialNo}" />
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
+        </ListBox.ItemTemplate>
+    </ListBox>
+</UserControl>

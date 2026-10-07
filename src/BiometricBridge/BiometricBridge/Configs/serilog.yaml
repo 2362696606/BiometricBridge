@@ -1,0 +1,28 @@
+Serilog:
+  MinimumLevel:
+    Default: Information
+#    Override:
+#      Microsoft: Warning
+#      Microsoft.AspNetCore.Mvc: Error
+#      System: Warning
+  Enrich:
+    - FromLogContext
+    - WithMachineName
+    - WithThreadId
+    - WithProcessId
+  Properties:
+    Application: OrderApi
+    Env: Development
+  WriteTo:
+    - Name: Async
+      Args:
+        configure:
+          - Name: File
+            Args:
+              path: logs/log-.json
+              rollingInterval: Day
+              rollOnFileSizeLimit: true
+              fileSizeLimitBytes: 104857600
+              retainedFileCountLimit: 30
+              formatter: Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact
+              
