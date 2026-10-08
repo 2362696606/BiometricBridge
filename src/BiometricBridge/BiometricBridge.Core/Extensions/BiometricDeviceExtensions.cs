@@ -43,6 +43,22 @@ public static class BiometricDeviceExtensions
             };
         }
 
+        if (biometricDeviceInfoAttribute is IrisDeviceInfoAttribute irisDeviceInfoAttribute)
+        {
+            return new IrisDeviceInfo()
+            {
+                Make = irisDeviceInfoAttribute.Make,
+                Model = irisDeviceInfoAttribute.Model,
+                DeviceProvider = irisDeviceInfoAttribute.DeviceProvider,
+                DeviceProviderId = irisDeviceInfoAttribute.DeviceProviderId,
+                DeviceSubIds = [.. irisDeviceInfoAttribute.DeviceSubIds],
+                DeviceSubType = irisDeviceInfoAttribute.DeviceSubType,
+                Certification = irisDeviceInfoAttribute.Certification,
+                Purpose = irisDeviceInfoAttribute.Purpose,
+                SerialNo = innerDevice.SerialNo,
+            };
+        }
+
         return null;
     }
 }

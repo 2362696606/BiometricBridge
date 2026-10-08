@@ -10,4 +10,8 @@
       <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="lib\Bio\" />
+    </ItemGroup>
+
 </Project>

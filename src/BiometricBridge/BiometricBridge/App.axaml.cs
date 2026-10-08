@@ -58,6 +58,7 @@ public class App : PrismApplication
         // 这样新增设备类型时装饰器自动生效，无需在此处逐个登记。
         var container = containerRegistry.GetContainer();
         container.Register<IBiometricDevice, FCK3L>();
+        container.Register<IBiometricDevice, EyeIrisDevice>();
         container.Register<IBiometricDevice, SerializingDeviceDecorator>(setup: Setup.Decorator);
 
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
