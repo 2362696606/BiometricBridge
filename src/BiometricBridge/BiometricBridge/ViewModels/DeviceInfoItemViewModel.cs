@@ -60,7 +60,7 @@ public partial class DeviceInfoItemViewModel : ObservableObject
     /// <summary>
     /// 本设备的生物特征模态。
     /// </summary>
-    [ObservableProperty] private BiometricType _modality;
+    [ObservableProperty] private BiometricModality _modality;
 
     /// <summary>
     /// 设备sn码

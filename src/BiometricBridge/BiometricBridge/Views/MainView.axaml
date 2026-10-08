@@ -13,9 +13,17 @@
     xmlns:vm="using:BiometricBridge.ViewModels"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Grid ColumnDefinitions="2*,Auto,8*">
-        <views:DeviceListView Grid.Column="0" />
-        <GridSplitter Grid.Column="1" Width="5" />
-        <ContentControl Grid.Column="2" />
+    <Grid RowDefinitions="8*,Auto,2*">
+        <Grid ColumnDefinitions="2*,Auto,8*" Grid.Row="0">
+            <views:DeviceListView Grid.Column="0" />
+            <GridSplitter Grid.Column="1" Width="5" />
+            <Grid Grid.Column="2" Grid.ColumnDefinitions="3*,Auto,7*">
+                <views:DeviceControlView Grid.Column="0" />
+                <GridSplitter Grid.Column="1" Width="5" />
+                <ContentControl Grid.Column="2" />
+            </Grid>
+        </Grid>
+        <GridSplitter Grid.Row="1" Height="5" />
+        <ContentControl Grid.Row="2" />
     </Grid>
 </ContentPage>

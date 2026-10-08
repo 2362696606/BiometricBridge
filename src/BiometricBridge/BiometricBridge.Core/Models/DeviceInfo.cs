@@ -51,7 +51,7 @@ public abstract class DeviceInfo
     /// <summary>
     /// 本设备的生物特征模态。
     /// </summary>
-    public abstract BiometricType Modality { get; }
+    public abstract BiometricModality Modality { get; }
 
     /// <summary>
     /// 设备sn码

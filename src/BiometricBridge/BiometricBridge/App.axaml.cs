@@ -112,6 +112,11 @@ public class App : PrismApplication
 
     protected override AvaloniaObject CreateShell()
     {
+        if (Design.IsDesignMode)
+        {
+            return Container.Resolve<MainWindow>();
+        }
+        
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime)
         {
             return Container.Resolve<MainWindow>();

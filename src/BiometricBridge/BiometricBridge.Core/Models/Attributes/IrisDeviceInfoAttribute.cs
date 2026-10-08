@@ -8,5 +8,5 @@ namespace BiometricBridge.Core.Models.Attributes;
 public class IrisDeviceInfoAttribute : BiometricDeviceInfoAttribute
 {
     /// <inheritdoc/>
-    public override BiometricType Modality => BiometricType.Iris;
+    public override BiometricModality Modality => BiometricModality.Iris;
 }

@@ -4,5 +4,5 @@ namespace BiometricBridge.Core.Models;
 
 public class FingerprintDeviceInfo:DeviceInfo
 {
-    public override BiometricType Modality => BiometricType.Finger;
+    public override BiometricModality Modality => BiometricModality.Finger;
 }

@@ -55,5 +55,5 @@ public abstract class BiometricDeviceInfoAttribute : Attribute
     /// <summary>
     /// 本设备的生物特征模态。
     /// </summary>
-    public abstract BiometricType Modality { get; }
+    public abstract BiometricModality Modality { get; }
 }
