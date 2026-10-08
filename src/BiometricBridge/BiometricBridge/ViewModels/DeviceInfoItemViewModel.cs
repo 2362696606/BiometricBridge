@@ -71,4 +71,9 @@ public partial class DeviceInfoItemViewModel : ObservableObject
     /// 设备状态
     /// </summary>
     [ObservableProperty] private BiometricDeviceStatus _status;
+
+    /// <summary>
+    /// 设备是否已连接。<see cref="DeviceListView"/> 据此在"已连接 / 未连接"两组配色间切换。
+    /// </summary>
+    [ObservableProperty] private bool _isConnected;
 }

@@ -35,6 +35,14 @@ public class App : PrismApplication
 
     public override void OnFrameworkInitializationCompleted()
     {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            // 释放设备得靠这个钩子：Prism.Avalonia 不释放容器（PrismApplicationBase 没有 Dispose、
+            // 也不订阅任何退出事件），DryIoc 更是不支持 IAsyncDisposable，所以容器不会替我们释放。
+            // 用 Exit 而非 MainWindow.Closed：Exit 由 DoShutdown 无条件触发，不受 ShutdownMode 影响。
+            desktop.Exit += OnApplicationExit;
+        }
+
         if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {
             singleViewFactoryApplicationLifetime.MainViewFactory = () =>
@@ -48,6 +56,24 @@ public class App : PrismApplication
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>
+    /// 应用退出：释放设备，把句柄还给厂商 SDK。
+    /// </summary>
+    /// <param name="sender">
+    /// 事件源。
+    /// </param>
+    /// <param name="e">
+    /// 事件参数。
+    /// </param>
+    /// <remarks>
+    /// 退出路径是同步的，故在此阻塞等待。不会死锁：设备释放内部的等待全部跑在线程池上且一律
+    /// <c>ConfigureAwait(false)</c>，不会回到 UI 线程。
+    /// </remarks>
+    private void OnApplicationExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
+    {
+        Container.Resolve<BiometricDeviceManager>().DisposeAsync().GetAwaiter().GetResult();
     }
 
     protected override void RegisterTypes(IContainerRegistry containerRegistry)
