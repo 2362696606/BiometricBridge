@@ -1,0 +1,55 @@
+<UserControl
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    mc:Ignorable="d"
+    mvvm:ViewModelLocator.AutoWireViewModel="True"
+    x:Class="BiometricBridge.Views.PreviewView"
+    x:DataType="viewModels:PreviewViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:mvvm="http://prismlibrary.com/"
+    xmlns:viewModels="clr-namespace:BiometricBridge.ViewModels"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <DockPanel Margin="12">
+        <TextBlock
+            DockPanel.Dock="Top"
+            FontWeight="SemiBold"
+            Text="预览" />
+
+        <StackPanel
+            DockPanel.Dock="Bottom"
+            Margin="0,12,0,0"
+            Orientation="Horizontal"
+            Spacing="8">
+            <Button Command="{Binding TogglePreviewCommand}" Content="{Binding PreviewButtonText}" />
+            <!--  预览占着设备，用户点之前就该知道  -->
+            <TextBlock
+                IsVisible="{Binding !IsPreviewing}"
+                Text="预览期间设备被占用，无法采集。"
+                VerticalAlignment="Center" />
+        </StackPanel>
+
+        <!--  每格一路画面：虹膜左右眼两格，单帧设备一格。格子由帧上的采集位置决定，与设备类型无关  -->
+        <ItemsControl ItemsSource="{Binding Panes}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <UniformGrid Rows="1" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="viewModels:PreviewPaneViewModel">
+                    <DockPanel Margin="4">
+                        <TextBlock
+                            DockPanel.Dock="Top"
+                            HorizontalAlignment="Center"
+                            Text="{Binding Caption}" />
+                        <!--  无帧时 Source 为 null，此处自然留白  -->
+                        <Image Source="{Binding Image}" Stretch="Uniform" />
+                    </DockPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </DockPanel>
+</UserControl>

@@ -83,10 +83,25 @@ public class App : PrismApplication
     /// <remarks>
     /// 退出路径是同步的，故在此阻塞等待。不会死锁：设备释放内部的等待全部跑在线程池上且一律
     /// <c>ConfigureAwait(false)</c>，不会回到 UI 线程。
+    /// <para>
+    /// 先让帧流闭嘴再放设备：释放期间若还有在飞的推帧，帧流已停，不会再往正在拆的界面上抛事件。
+    /// 设备侧那头由管理器收（见 <see cref="BiometricDeviceManager.DisposeAsync"/>）。
+    /// </para>
     /// </remarks>
     private void OnApplicationExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
-        Container.Resolve<BiometricDeviceManager>().DisposeAsync().GetAwaiter().GetResult();
+        Container.Resolve<PreviewFrameStream>().Dispose();
+
+        try
+        {
+            Container.Resolve<BiometricDeviceManager>().DisposeAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            // 在这里抛出去就是崩溃退出。而此刻进程本来就要结束，"原生流可能还活着"已无从补救，
+            // 记一条再放行走人。
+            Log.Warning(exception, "释放设备时出错，忽略并继续退出。");
+        }
     }
 
     protected override void RegisterTypes(IContainerRegistry containerRegistry)
@@ -100,6 +115,10 @@ public class App : PrismApplication
         // 本项目唯一一处 RegisterInstance —— 实例必须先于容器存在（见 _logStream 的说明），容器只登记不构造。
         containerRegistry.RegisterInstance(_logStream);
 
+        // 预览帧流单例：设备侧拿它当接收端，界面侧从它取帧，两边必须是同一个实例。
+        // 也得是单例才能像上面那样在退出路径上显式收尾（容器不替我们释放）。
+        containerRegistry.RegisterSingleton<PreviewFrameStream>();
+
         // 装饰器由容器原生接管：装饰器构造函数注入 IBiometricDevice，DryIoc 会把被装饰的实现传进去。
         // 这样新增设备类型时装饰器自动生效，无需在此处逐个登记。
         var container = containerRegistry.GetContainer();
@@ -107,12 +126,15 @@ public class App : PrismApplication
         container.Register<IBiometricDevice, EyeIrisDevice>();
 
         // 装饰链：order 越大离真实设备越远。串行化贴着设备（在锁内做真正的原生调用），
-        // 日志在最外层，于是耗时含排队等待，"等锁期间被取消"也能留痕。
+        // 日志在其外，于是耗时含排队等待，"等锁期间被取消"也能留痕；补帧在最外层，免得补出来的帧
+        // 被日志装饰器数进去。
         // 显式给 order 而不靠注册先后：默认 order 为 0 时按注册顺序定层，日后调整注册顺序会悄悄改变装配层级。
         container.Register<IBiometricDevice, SerializingDeviceDecorator>(
             setup: Setup.DecoratorWith(_ => true, order: 0));
         container.Register<IBiometricDevice, LoggingDeviceDecorator>(
             setup: Setup.DecoratorWith(_ => true, order: 1));
+        container.Register<IBiometricDevice, PacingDeviceDecorator>(
+            setup: Setup.DecoratorWith(_ => true, order: 2));
 
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
     }

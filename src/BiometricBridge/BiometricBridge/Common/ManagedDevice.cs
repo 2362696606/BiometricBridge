@@ -27,4 +27,19 @@ internal sealed class ManagedDevice
     /// 管理器只转发调用，不自行制造迁移。
     /// </remarks>
     internal BiometricDeviceStatus DeviceStatus { get; set; } = BiometricDeviceStatus.Ready;
+
+    /// <summary>
+    /// 保护 <see cref="Preview"/>。
+    /// </summary>
+    /// <remarks>
+    /// 与设备访问（<c>SerializingDeviceDecorator</c> 的门）是两把不同的锁，不可混用：
+    /// 停止预览时若去抢设备门，就会与"等它放开门"的预览任务互相吊死。
+    /// 本锁只保护这一个字段，临界区里不做任何等待。
+    /// </remarks>
+    internal object PreviewGate { get; } = new();
+
+    /// <summary>
+    /// 当前预览会话；null 表示没有预览在跑。
+    /// </summary>
+    internal PreviewSession? Preview { get; set; }
 }

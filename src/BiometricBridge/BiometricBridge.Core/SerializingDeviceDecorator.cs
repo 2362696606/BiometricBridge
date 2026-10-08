@@ -9,7 +9,11 @@ namespace BiometricBridge.Core;
 /// <para>
 /// 被装饰的设备自身不做并发保护（见 <see cref="IBiometricDevice"/> 的实现说明），由本装饰器负责。
 /// 采集期间底层设备句柄正被原生调用使用，此时若放行 <see cref="DisconnectAsync"/> 去释放该句柄，
-/// 原生侧会访问已释放的内存，故连接、断开与采集共用同一把锁，而不只是采集之间互斥。
+/// 原生侧会访问已释放的内存，故连接、断开、采集与预览共用同一把锁，而不只是采集之间互斥。
+/// </para>
+/// <para>
+/// <see cref="RunPreviewAsync"/> 是长时操作，<b>整个预览期间都占着这把锁</b>：它的原生流是
+/// fire-and-forget 的，方法返回前就放锁等同于"设备空闲"，正是上面要防的那种崩溃。
 /// </para>
 /// <para>
 /// 排队等待由调用方自己的 <see cref="CancellationToken"/> 控制；<see cref="CaptureRequest.Timeout"/>
@@ -91,6 +95,24 @@ public sealed class SerializingDeviceDecorator : IBiometricDeviceDecorator
         try
         {
             return await InnerDevice.CaptureAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 排队等待由调用方自己的 <paramref name="cancellationToken"/> 控制；拿到锁之后，
+    /// 流要跑多久锁就持多久（见类型说明），因此取消令牌在这里是"请求停流"，不是"放弃排队"。
+    /// </remarks>
+    public async Task RunPreviewAsync(PreviewFrameSink sink, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await InnerDevice.RunPreviewAsync(sink, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

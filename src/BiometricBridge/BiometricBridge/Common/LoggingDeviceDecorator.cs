@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using BiometricBridge.Core;
@@ -18,8 +19,9 @@ namespace BiometricBridge.Common;
 /// 只加日志、不改语义：调用原样转发给内层设备，异常也只记录不吞 —— 上层看到的成功/失败与未加本装饰器时一致。
 /// </para>
 /// <para>
-/// 刻意处于装饰链最外层（注册时给了更大的 order，见 <c>App.RegisterTypes</c>）：这样排队等待
+/// 刻意排在串行化之外（注册时给了更大的 order，见 <c>App.RegisterTypes</c>）：这样排队等待
 /// （<see cref="SerializingDeviceDecorator"/> 的互斥锁）也算进耗时，且"等锁期间被取消"这类异常同样留痕。
+/// 但它不是链上最外层的：补帧装饰器还套在外面，免得补出来的帧被本类数进"共收到 N 帧"。
 /// </para>
 /// <para>
 /// 放在 app 程序集而不是 Core：Core 是无任何包依赖的抽象层，日志实现（Serilog）属于宿主关切。
@@ -103,6 +105,56 @@ public sealed class LoggingDeviceDecorator : IBiometricDeviceDecorator
         CancellationToken cancellationToken = default)
     {
         return RunAsync("Capture", () => InnerDevice.CaptureAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 预览是长时操作，故只在开始与结束时各记一条，<b>不逐帧记</b>。
+    /// 结束时记下收到的帧数：一帧都没有通常意味着设备侧的流压根没跑起来
+    /// （例如手动触发模式其实不出帧，见 <c>EyeIrisDevice.RunPreviewAsync</c> 的备注），
+    /// 这是把那种失败变可诊断的地方。
+    /// </remarks>
+    public async Task RunPreviewAsync(PreviewFrameSink sink, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+
+        // 数帧就地一个闭包即可 —— 不必为了让帧流过而生出一个类型。
+        // 计数之所以装进 StrongBox：闭包捕获的是只读的引用，而 Interlocked 要的是一个字段的 ref。
+        // 设备线程与补帧定时器线程会并发调用，故用原子操作。
+        var count = new StrongBox<int>();
+        var lastFrameAt = new StrongBox<long>();
+        PreviewFrameSink counting = frame =>
+        {
+            Interlocked.Increment(ref count.Value);
+            Volatile.Write(ref lastFrameAt.Value, Stopwatch.GetTimestamp());
+            sink(frame);
+        };
+
+        try
+        {
+            await RunAsync("Preview", () => InnerDevice.RunPreviewAsync(counting, cancellationToken))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            // 走到这里流已停，取一次即可。
+            var frames = Volatile.Read(ref count.Value);
+            if (frames == 0)
+            {
+                _logger.Warning("预览结束，但一帧都没收到：设备未投出实时图。");
+            }
+            else
+            {
+                // 顺带记下最后一帧距结束有多久。停止预览是"取消 → 收尾宽限 → 返回"：
+                // 设备若在取消那一刻就停了流，这个间隔约等于那段宽限；若它一路投到最后一刻，
+                // 间隔会接近 0 —— 那说明取消并没有同步停流，停止路径得重新评估。
+                var idle = Stopwatch.GetElapsedTime(Volatile.Read(ref lastFrameAt.Value));
+                _logger.Information(
+                    "预览结束，共收到 {FrameCount} 帧；最后一帧在结束前 {IdleMilliseconds} ms。",
+                    frames,
+                    (long)idle.TotalMilliseconds);
+            }
+        }
     }
 
     /// <summary>

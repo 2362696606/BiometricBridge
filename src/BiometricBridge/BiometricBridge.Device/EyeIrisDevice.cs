@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using BiometricBridge.Core;
 using BiometricBridge.Core.Models;
@@ -80,6 +81,24 @@ public class EyeIrisDevice : IBiometricDevice
     /// </remarks>
     private const int SizeFlag = 0x00000303;
 
+    /// <summary>
+    /// 请求停止后，留给在飞回调收尾的宽限。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>这不是"等结束回调"。</b>手动模式下 <c>biospi_cancel</c> 不会投 <c>CB_CAPTURE</c> ——
+    /// 那个回调报的是"采集事务自己走完了"（质量达标、或到了 <c>TimeOut</c>），而不限时的手动事务
+    /// 永远不会自己走完。头文件对 <c>biospi_cancel</c> 的定义是"<b>停止</b>注册、采集或识别"，
+    /// 对 <c>biospi_capture</c> 则写"可以通过 <c>biospi_cancel</c> <b>终止</b>此接口的继续执行"；
+    /// 厂商的 C# 与 C++ 两个示例停止时也都只发一句 <c>Cancel</c>，不等任何回调。
+    /// </para>
+    /// <para>
+    /// 故这段宽限只是给已经开始的实时图回调留出收尾时间。早先把"收到 <c>CB_CAPTURE</c>"当成
+    /// 流结束的凭据，结果每次停止都要空等满 3 秒再报超时 —— 那个回调根本不会来。
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan StopGrace = TimeSpan.FromMilliseconds(300);
+
     #endregion
 
     #region Fileds
@@ -94,7 +113,41 @@ public class EyeIrisDevice : IBiometricDevice
     /// </summary>
     private string? _serialNo;
 
+    /// <summary>
+    /// 当前的预览接收端；null 表示没有预览在进行。
+    /// </summary>
+    /// <remarks>
+    /// 蹦床（设备线程）读它，<see cref="RunPreviewAsync"/> 写它，故标记 <see langword="volatile"/>。
+    /// </remarks>
+    private volatile PreviewFrameSink? _previewSink;
+
+    /// <summary>
+    /// 当前预览的"采集已结束"信号；由 <see cref="_captureCallback"/> 完成。
+    /// </summary>
+    private volatile TaskCompletionSource? _captureEnded;
+
+    /// <summary>
+    /// 实时图回调的委托实例。存进字段是硬性要求：只传进原生侧而不持有引用，GC 一旦回收，
+    /// 原生侧留下的就是野函数指针，下次设备事件触发即崩（见 <see cref="EyeIrisPlatformApi"/> 的备注）。
+    /// </summary>
+    private readonly EyeIrisPlatformApi.FireOnLiveImage _liveImageCallback;
+
+    /// <summary>
+    /// 采集结果回调的委托实例。存字段的理由同上。
+    /// </summary>
+    private readonly EyeIrisPlatformApi.FireOnCaptureNotify _captureCallback;
+
     #endregion
+
+    /// <summary>
+    /// 构造设备并准备好原生回调委托。
+    /// </summary>
+    public EyeIrisDevice()
+    {
+        // 绑定实例方法的委托：既把 this 保活，原生侧拿到的也是稳定的函数指针，无需 GCHandle。
+        _liveImageCallback = OnLiveImage;
+        _captureCallback = OnCaptureNotify;
+    }
 
     /// <inheritdoc/>
     public bool IsConnected => _attached;
@@ -148,6 +201,26 @@ public class EyeIrisDevice : IBiometricDevice
                 // 既泄漏资源，也让下一次 attach 失败。
                 EyeIrisPlatformApi.biospi_detach(EyeIrisPlatformApi.NormalDetach);
                 throw new InvalidOperationException($"读取设备信息失败，错误码 0x{code:X8}。");
+            }
+
+            // 回调在连接时注册一次，与厂商的三个示例一致（它们在窗口初始化时就把 7 个回调全注册上）。
+            // 不在起预览时注册：biospi_set_callback 是进程级的单个导出，流跑起来后再改注册有竞态。
+            // 此刻还没有预览接收端，蹦床会丢掉帧；起预览时才把接收端设上。
+            code = EyeIrisPlatformApi.SetLiveImageCallback(
+                EyeIrisPlatformApi.CallbackLiveImage, _liveImageCallback, IntPtr.Zero);
+            if (code != EyeIrisPlatformApi.NoError)
+            {
+                EyeIrisPlatformApi.biospi_detach(EyeIrisPlatformApi.NormalDetach);
+                throw new InvalidOperationException($"注册实时图回调失败，错误码 0x{code:X8}。");
+            }
+
+            // 采集结束回调：预览任务靠它完成，进而释放串行化门，故同样是必需项而非可选项。
+            code = EyeIrisPlatformApi.SetCaptureCallback(
+                EyeIrisPlatformApi.CallbackCapture, _captureCallback, IntPtr.Zero);
+            if (code != EyeIrisPlatformApi.NoError)
+            {
+                EyeIrisPlatformApi.biospi_detach(EyeIrisPlatformApi.NormalDetach);
+                throw new InvalidOperationException($"注册采集回调失败，错误码 0x{code:X8}。");
             }
 
             return DecodeAnsiString(device.DeviceNum);
@@ -303,6 +376,233 @@ public class EyeIrisDevice : IBiometricDevice
         }
 
         return results;
+    }
+
+    /// <inheritdoc/>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="sink"/> 为 null。
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// 设备未连接、已有预览在进行、或驱动拒绝这次采集，
+    /// 或请求停止后迟迟收不到采集结束回调。
+    /// </exception>
+    /// <exception cref="TimeoutException">
+    /// 请求停止后 <see cref="StopGrace"/> 内未收到采集结束回调。
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// 实现方式是<b>跑一个长时异步采集</b>：本库没有独立的"开流"接口，实时图只在采集进行中
+    /// 经 <see cref="EyeIrisPlatformApi.CallbackLiveImage"/> 回调给出。停止即
+    /// <see cref="EyeIrisPlatformApi.biospi_cancel"/> —— 头文件管它叫"停止/终止"，
+    /// 停完即放手，<b>不等</b> <see cref="EyeIrisPlatformApi.CallbackCapture"/>（见 <see cref="StopGrace"/>）。
+    /// </para>
+    /// <para>
+    /// 采集参数取<b>手动触发</b>：自动模式会在质量达标时结束整次采集，流就断了；手动模式下
+    /// 采集不会自行收尾，实时图得以一直流。注意质量分在这里不决定流的存活，
+    /// 故取设备默认档位 —— 本库的 0 是"来者不拒"的有效门限（见 <see cref="DefaultQuality"/> 的备注），
+    /// 在自动模式下会立刻满足，是不该踩的坑。
+    /// </para>
+    /// </remarks>
+    public async Task RunPreviewAsync(PreviewFrameSink sink, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+
+        if (!_attached)
+        {
+            throw new InvalidOperationException("设备未连接。");
+        }
+
+        // 单飞：本机的采集是全局单例状态（biospi_cancel 亦然），两台同时流传不出去。
+        if (Interlocked.CompareExchange(ref _previewSink, sink, null) is not null)
+        {
+            throw new InvalidOperationException("该设备已有预览在进行中。");
+        }
+
+        var captureEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _captureEnded = captureEnded;
+
+        try
+        {
+            var parameters = new EyeIrisPlatformApi.BioSpiParams
+            {
+                Eyes = EyeIrisPlatformApi.EyeAuto,
+                Quality = DefaultQuality,
+                EyeExpo = EyeExposure,
+
+                // 不限时：流要跑到被停止为止。普通采集禁用 0（见 CaptureAsync 的校验），
+                // 这里要的正是它的"不限时"语义。
+                TimeOut = 0,
+                Type = EyeIrisPlatformApi.CaptureTypeManual,
+                Priority = EyeIrisPlatformApi.PrioritySpeed,
+                Size = SizeFlag,
+            };
+
+            // 取消即请求停流。biospi_cancel 是裸原生调用，不需要设备门 ——
+            // 预览正持有设备，此刻不会有别的设备操作在跑。
+            using var registration = cancellationToken.Register(static () => EyeIrisPlatformApi.biospi_cancel(0));
+
+            // 异步采集：接受后立即返回，图像与结果都走回调，故出参传局部、图像缓冲传 null。
+            var code = await Task.Run(() =>
+            {
+                var left = 0;
+                var right = 0;
+                return EyeIrisPlatformApi.biospi_capture(
+                    EyeIrisPlatformApi.CmdTypeAsync, parameters, ref left, ref right, null, null);
+            }, cancellationToken).ConfigureAwait(false);
+
+            if (code != EyeIrisPlatformApi.NoError)
+            {
+                // 失败也可能是取消触发的停止，先判定取消再报失败。
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException(
+                    $"启动预览失败，错误码 0x{code:X8}（取值见 EyeIrisPlatformApi 的错误码区）。");
+            }
+
+            await WaitForStreamEndAsync(captureEnded.Task, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // 先断接收端再清信号：顺序反了的话，蹦床会拿着已经不认的信号继续投帧。
+            _previewSink = null;
+            _captureEnded = null;
+        }
+    }
+
+    /// <summary>
+    /// 等待预览流结束。
+    /// </summary>
+    /// <param name="ended">
+    /// 由采集结束回调完成的信号。
+    /// </param>
+    /// <param name="cancellationToken">
+    /// 取消令牌。
+    /// </param>
+    /// <returns>
+    /// 表示等待操作的任务。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// 没取消时一直等下去（预览本就该长时运行）。
+    /// </para>
+    /// <para>
+    /// 取消后只再等一个宽限，<b>且等不到回调不算失败</b>：手动模式下那个回调压根不来
+    /// （见 <see cref="StopGrace"/>），拿它当结束凭据会让每次停止都变成"超时"。
+    /// 已按头文件与厂商两个示例确认 <c>biospi_cancel</c> 是<b>终止</b>采集，宽限到点即可放手。
+    /// </para>
+    /// </remarks>
+    private static async Task WaitForStreamEndAsync(Task ended, CancellationToken cancellationToken)
+    {
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = cancellationToken.Register(() => cancelled.TrySetResult());
+
+        if (await Task.WhenAny(ended, cancelled.Task).ConfigureAwait(false) == ended)
+        {
+            return;
+        }
+
+        // 回调来了就早收手，没来就等满宽限 —— 两条路都正常返回。
+        await Task.WhenAny(ended, Task.Delay(StopGrace)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 实时图回调蹦床。
+    /// </summary>
+    /// <param name="eye">
+    /// 眼别。
+    /// </param>
+    /// <param name="width">
+    /// 图像宽度。
+    /// </param>
+    /// <param name="height">
+    /// 图像高度。
+    /// </param>
+    /// <param name="liveImage">
+    /// 灰度图像数据指针，<b>只在本次回调期间有效</b>。
+    /// </param>
+    /// <param name="imageSize">
+    /// 图像数据字节数。
+    /// </param>
+    /// <param name="context">
+    /// 注册回调时传入的上下文；本类传 <see cref="IntPtr.Zero"/>（委托已绑定实例，不需要它）。
+    /// </param>
+    /// <remarks>
+    /// 由设备线程调用。只做四件事：取接收端、拷图、造帧、投递。
+    /// <b>不碰 <see cref="_attached"/> 或任何 <see cref="DisconnectAsync"/> 会改的状态</b>
+    /// —— 那些状态在流的存续期内不会变（预览持有设备），碰了反而引入竞态。
+    /// </remarks>
+    private void OnLiveImage(int eye, int width, int height, IntPtr liveImage, int imageSize, IntPtr context)
+    {
+        // 没有预览在跑就丢：回调是连接时注册的，本类的同步采集同样会让它触发。
+        if (_previewSink is not { } sink || liveImage == IntPtr.Zero || width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        var expected = width * height;
+        if (imageSize < expected)
+        {
+            return;
+        }
+
+        // 指针只在回调期间有效，当场拷走（PreviewFrame.Data 的契约要求调用方拥有缓冲）。
+        var data = new byte[expected];
+        Marshal.Copy(liveImage, data, 0, expected);
+
+        var frame = new PreviewFrame
+        {
+            Data = data,
+            Width = width,
+            Height = height,
+            Position = eye switch
+            {
+                EyeIrisPlatformApi.EyeLeft => BiometricPosition.LeftIris,
+                EyeIrisPlatformApi.EyeRight => BiometricPosition.RightIris,
+                _ => null,
+            },
+            CapturedAt = DateTimeOffset.UtcNow,
+        };
+
+        try
+        {
+            sink(frame);
+        }
+        catch (Exception)
+        {
+            // 本方法跑在原生回调的栈帧里，异常穿回去会带走进程；接口契约也写明接收端不得抛。
+            // 这里兜住并丢弃：最坏是丢一帧。
+        }
+    }
+
+    /// <summary>
+    /// 采集结果回调蹦床：预览流的结束信号来源。
+    /// </summary>
+    /// <param name="result">
+    /// 结果码，见 <see cref="EyeIrisPlatformApi"/> 的采集段常量。
+    /// </param>
+    /// <param name="leftQuality">
+    /// 左眼质量分。
+    /// </param>
+    /// <param name="rightQuality">
+    /// 右眼质量分。
+    /// </param>
+    /// <param name="leftImage">
+    /// 左眼图像指针。
+    /// </param>
+    /// <param name="rightImage">
+    /// 右眼图像指针。
+    /// </param>
+    /// <param name="context">
+    /// 同 <see cref="OnLiveImage"/>。
+    /// </param>
+    /// <remarks>
+    /// 事务<b>自己</b>走完时（质量达标、超时、设备出错）靠它让预览提前收手，不必等到被取消。
+    /// 停止预览那条路不依赖它 —— 手动取消不会走这个回调（见 <see cref="StopGrace"/>）。
+    /// </remarks>
+    private void OnCaptureNotify(int result, uint leftQuality, uint rightQuality,
+        IntPtr leftImage, IntPtr rightImage, IntPtr context)
+    {
+        // 同步采集也会触发本回调；只有预览在跑时才认它，否则会把别人的流提前放行。
+        _captureEnded?.TrySetResult();
     }
 
     /// <summary>

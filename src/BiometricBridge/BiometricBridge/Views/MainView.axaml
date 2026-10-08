@@ -20,7 +20,7 @@
             <Grid Grid.Column="2" Grid.ColumnDefinitions="3*,Auto,7*">
                 <views:DeviceControlView Grid.Column="0" />
                 <GridSplitter Grid.Column="1" Width="5" />
-                <ContentControl Grid.Column="2" />
+                <views:PreviewView Grid.Column="2" />
             </Grid>
         </Grid>
         <GridSplitter Grid.Row="1" Height="5" />
