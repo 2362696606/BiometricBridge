@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BiometricBridge.Core;
 using BiometricBridge.Core.Models;
 using BiometricBridge.Core.Models.Attributes;
@@ -53,6 +54,14 @@ public class FCK3L : IBiometricDevice
     private const int SlapWidthMin = 800;
 
     /// <summary>
+    /// 取原始图时传给 SDK 的压缩比。
+    /// </summary>
+    /// <remarks>
+    /// 取参考实现的 <c>1</c>。Raw 格式下这个参数按理无意义，但参考实现是实测能用的，值就跟着对齐。
+    /// </remarks>
+    private const int RawImageCompressionRatio = 1;
+
+    /// <summary>
     /// 预览取帧的质量门限。<c>0</c> 表示不设要求。
     /// </summary>
     /// <remarks>
@@ -69,13 +78,24 @@ public class FCK3L : IBiometricDevice
     private const int PreviewCaptureTimeout = 200;
 
     /// <summary>
-    /// 预览取帧的最小间隔（毫秒）。
+    /// 每轮之间至少歇这么久。
     /// </summary>
     /// <remarks>
-    /// 设备能出多快就出多快，但每帧是一整张原始图（<c>Width × Height</c> 字节，FAP50 下约 0.6 MB），
-    /// 而预览并不需要那个速率 —— 推得再快也会被上层丢成"最新一帧"，白堆分配。
+    /// 只是兜底：设备正常返回一次要几百毫秒，这个下限根本不起作用；它挡的是"设备调用瞬时返回"
+    /// （真掉线时抛得快）把循环变成忙等。取参考实现的 50ms。
+    /// <b>不做固定节流</b>：画面更新得够不够密由 <see cref="PacingDeviceDecorator"/> 那道下限兜，
+    /// 设备这一侧只管按自己的物理节奏出帧 —— 固定节流只会把设备的节奏再拖慢一截。
     /// </remarks>
-    private const int PreviewInterval = 100;
+    private static readonly TimeSpan PreviewMinInterval = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// 预览连续取不到帧多久，就认为流该收手了。
+    /// </summary>
+    /// <remarks>
+    /// 取不到帧在预览里是常态（没放手指就没有帧），故不能一失败就断流；但设备真掉线时也不能永远干等
+    /// —— 这段时限是两者的分界。取参考实现的 3 秒。
+    /// </remarks>
+    private static readonly TimeSpan PreviewFailureLimit = TimeSpan.FromSeconds(3);
 
     #endregion
 
@@ -198,10 +218,16 @@ public class FCK3L : IBiometricDevice
         using var registration = cancellationToken.Register(() => IctScanApi.ictScanStopCapture(handle));
 
         var (image, qualityScore) = await Task.Run(
-            () => CaptureImage(handle, (int)(request.RequestedScore ?? 0), request.Timeout, cancellationToken),
+            () => GrabImage(handle, (int)(request.RequestedScore ?? 0), request.Timeout, cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (image is null)
+        {
+            // 取不到图：起采被拒，或取图本身失败。失败原因见 ictScanGetLastErrNo。
+            throw new InvalidOperationException($"采集失败，错误码 {IctScanApi.ictScanGetLastErrNo()}。");
+        }
 
         // 库不提供设备时间，用主机时间；同一次采集的各条结果共用同一时刻。
         var capturedAt = DateTimeOffset.UtcNow;
@@ -257,8 +283,13 @@ public class FCK3L : IBiometricDevice
     /// 预览只显示原图，分割是采集结果的事。
     /// </para>
     /// <para>
-    /// 没有手指时每轮会等满 <see cref="PreviewCaptureTimeout"/>，循环因此不会空转；
-    /// 每帧之间再歇 <see cref="PreviewInterval"/>，免得白白堆分配。
+    /// 每轮之间<b>不做固定节流</b>：设备按自己的物理节奏出帧即可，画面更新得够不够密交给
+    /// <see cref="PacingDeviceDecorator"/> 那道下限兜。只有设备调用瞬时返回时才靠
+    /// <see cref="PreviewMinInterval"/> 兜住忙等。
+    /// </para>
+    /// <para>
+    /// 某一轮取不到帧<b>不算流失败</b>，跳过接着转，只有连续取不到够久才收手
+    /// （见 <see cref="PreviewFailureLimit"/>）。
     /// </para>
     /// </remarks>
     public async Task RunPreviewAsync(PreviewFrameSink sink, CancellationToken cancellationToken = default)
@@ -276,24 +307,51 @@ public class FCK3L : IBiometricDevice
 
         try
         {
+            // 连续取不到帧的起点，取到帧即归零；null 表示当前没在连续失败中。
+            long? failingSince = null;
+
             while (true)
             {
+                var startedAt = Stopwatch.GetTimestamp();
+
                 var (image, _) = await Task.Run(
-                    () => CaptureImage(handle, PreviewQualityGate, PreviewCaptureTimeout, cancellationToken),
+                    () => GrabImage(handle, PreviewQualityGate, PreviewCaptureTimeout, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
 
-                sink(new PreviewFrame
+                if (image is null)
                 {
-                    Data = image,
-                    Width = _deviceInfo.Width,
-                    Height = _deviceInfo.Height,
+                    // 取不到帧**不算失败**：没放手指就取不到，而预览问的正是"现在镜头前有没有手指"。
+                    // 一失败就断流的话，操作员几秒不放手预览就没了（参考实现在真机上栽过这一跤）。
+                    // 但也不能永远干等：连续取不到够久，就当设备掉线了，收手让上层知道。
+                    failingSince ??= Stopwatch.GetTimestamp();
+                    if (Stopwatch.GetElapsedTime(failingSince.Value) >= PreviewFailureLimit)
+                    {
+                        throw new InvalidOperationException(
+                            $"连续 {PreviewFailureLimit.TotalSeconds} 秒取不到图像，错误码 {IctScanApi.ictScanGetLastErrNo()}。");
+                    }
+                }
+                else
+                {
+                    failingSince = null;
 
-                    // 预览取的是整幅原图，无从判断手指落在哪。
-                    Position = null,
-                    CapturedAt = DateTimeOffset.UtcNow,
-                });
+                    sink(new PreviewFrame
+                    {
+                        Data = image,
+                        Width = _deviceInfo.Width,
+                        Height = _deviceInfo.Height,
 
-                await Task.Delay(PreviewInterval, cancellationToken).ConfigureAwait(false);
+                        // 预览取的是整幅原图，无从判断手指落在哪。
+                        Position = null,
+                        CapturedAt = DateTimeOffset.UtcNow,
+                    });
+                }
+
+                // 只在整轮异常快时才补一点延迟，不做固定节流（见 PreviewMinInterval）。
+                var elapsed = Stopwatch.GetElapsedTime(startedAt);
+                if (elapsed < PreviewMinInterval)
+                {
+                    await Task.Delay(PreviewMinInterval - elapsed, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -318,13 +376,20 @@ public class FCK3L : IBiometricDevice
     /// 取消令牌。
     /// </param>
     /// <returns>
-    /// 图像数据与本次达到的质量分。
+    /// 取到图时为其数据与本次达到的质量分；取不到时为 <see langword="null"/> 与 0。
     /// </returns>
     /// <remarks>
+    /// <para>
+    /// <b>不抛。</b>取不到图既可能只是没放手指，也可能是硬件故障，而本库用同一个失败返回值表示两者，
+    /// 分不开，故"算不算失败"交给调用方定夺 —— 采集算（见 <see cref="CaptureAsync"/>），
+    /// 预览不算（见 <see cref="RunPreviewAsync"/>）。
+    /// </para>
+    /// <para>
     /// 阻塞调用，调用方须放到线程池上。<paramref name="cancellationToken"/> 在这里只用来分辨
-    /// "失败"与"取消触发的停止"；真正打断阻塞的是 <c>ictScanStopCapture</c>，由调用方注册。
+    /// "取不到"与"取消触发的停止"；真正打断阻塞的是 <c>ictScanStopCapture</c>，由调用方注册。
+    /// </para>
     /// </remarks>
-    private (byte[] Image, int Quality) CaptureImage(
+    private (byte[]? Image, int Quality) GrabImage(
         IntPtr handle,
         int minQuality,
         int timeout,
@@ -333,18 +398,19 @@ public class FCK3L : IBiometricDevice
         var quality = 0;
         if (IctScanApi.ictScanStartCaptureImage(handle, minQuality, ref quality, timeout) == 0)
         {
-            // 失败可能是取消触发的停止，先判定取消再报失败。
+            // 失败可能是取消触发的停止，先判定取消，再当"取不到"。
             cancellationToken.ThrowIfCancellationRequested();
-            throw new InvalidOperationException($"采集失败，错误码 {IctScanApi.ictScanGetLastErrNo()}。");
+            return (null, 0);
         }
 
         // 库报出的长度偏小，不足以容纳整幅图，故缓冲区按传感器像素尺寸开；
         // 且不按它报出的长度裁剪 —— RawImage 的数据长度必须等于 Width × Height。
         var buffer = new byte[_deviceInfo.Width * _deviceInfo.Height];
         var length = buffer.Length;
-        if (IctScanApi.ictScanGetLastImage(handle, buffer, ref length, IctScanApi.ImageFormatRaw, 0) == 0)
+        if (IctScanApi.ictScanGetLastImage(
+                handle, buffer, ref length, IctScanApi.ImageFormatRaw, RawImageCompressionRatio) == 0)
         {
-            throw new InvalidOperationException($"取图失败，错误码 {IctScanApi.ictScanGetLastErrNo()}。");
+            return (null, 0);
         }
 
         return (buffer, quality);

@@ -28,17 +28,27 @@ public sealed class PacingDeviceDecorator : IBiometricDeviceDecorator
     /// 预览刷新率的下限（帧/秒）。
     /// </summary>
     /// <remarks>
-    /// "预览不低于 3fps"是预览功能的需求，与具体设备无关，故整条装饰链共用这一个值。
-    /// 它现在落在设备侧而非界面侧 —— 这是有意的取舍：界面因此不必再接一个缓存。
+    /// <para>
+    /// 规范只要求不低于 3fps，这里取 10fps。<b>决定观感的是"交付节拍"，不是设备出帧率</b>：
+    /// 设备慢于一拍时本装饰器重发最后一帧，交付快一拍，新帧从产生到露面的等待就短一截 ——
+    /// 3fps 下最多等 333ms，10fps 下最多 100ms。
+    /// </para>
+    /// <para>
+    /// 取 10fps 是对齐参考实现：它把取帧与发帧解耦之后，发帧侧走的正是 100ms 的节拍。
+    /// </para>
+    /// <para>
+    /// 与具体设备无关，故整条装饰链共用这一个值。它落在设备侧而非界面侧是有意的取舍：
+    /// 界面因此不必再接一个缓存。
+    /// </para>
     /// </remarks>
-    public const int MinimumFrameRate = 3;
+    public const int MinimumFrameRate = 10;
 
     /// <summary>
     /// 定时器粒度余量（毫秒）。
     /// </summary>
     /// <remarks>
     /// 系统定时器<b>只会晚不会早</b>，且按系统时钟粒度触发（Windows 默认约 15.6ms）。
-    /// 实测按名义 333ms 排程，相邻补帧实际落在 ~341ms，折合 2.93fps —— 反而跌破 3fps。
+    /// 实测按名义 333ms 排程，相邻补帧实际落在 ~341ms，折合 2.93fps —— 反而跌破了当时定的 3fps 下限。
     /// 故名义间隔取小一点，把这点粒度吃进去。留大了会无谓地提高推送频率，取 20ms 有一档余量。
     /// </remarks>
     private const double TimerGranularityMarginMs = 20;

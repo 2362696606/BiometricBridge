@@ -122,7 +122,7 @@ public class App : PrismApplication
         // 装饰器由容器原生接管：装饰器构造函数注入 IBiometricDevice，DryIoc 会把被装饰的实现传进去。
         // 这样新增设备类型时装饰器自动生效，无需在此处逐个登记。
         var container = containerRegistry.GetContainer();
-        // container.Register<IBiometricDevice, FCK3L>();
+        container.Register<IBiometricDevice, FCK3L>();
         container.Register<IBiometricDevice, EyeIrisDevice>();
 
         // 装饰链：order 越大离真实设备越远。串行化贴着设备（在锁内做真正的原生调用），
