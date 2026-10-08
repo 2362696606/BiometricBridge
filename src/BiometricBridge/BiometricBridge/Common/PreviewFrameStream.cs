@@ -22,6 +22,10 @@ namespace BiometricBridge.Common;
 /// <para>
 /// 只留最新一帧、不留历史：预览要的是"现在"，界面画得慢时丢的是旧帧，而不是让画面越积越滞后。
 /// </para>
+/// <para>
+/// 内容没变的帧不再往下投：补帧中继是把同一个帧对象按节拍重发，而界面每收到一帧就要重建一张位图。
+/// 判定用引用相等，见 <see cref="_lastDelivered"/>。
+/// </para>
 /// </remarks>
 public sealed class PreviewFrameStream : IDisposable
 {
@@ -45,15 +49,33 @@ public sealed class PreviewFrameStream : IDisposable
     /// </summary>
     private volatile bool _accepting;
 
+    /// <summary>
+    /// 上一次投给订阅者的那一帧，用来跳过重复帧。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 投递本身跑在界面线程上，<see cref="Start"/>/<see cref="Stop"/> 也由界面侧调用，故这里不加同步。
+    /// 若日后有别的线程来调它们，最坏也只是多投一次或少投一次，不会坏。
+    /// </para>
+    /// <para>
+    /// 之所以能靠<b>引用相等</b>判定内容相同：补帧中继重发的就是<b>同一个帧对象</b>。
+    /// 而界面那边每收到一帧就要重建一张位图 —— 为一张没变的图白干一次并不便宜。
+    /// </para>
+    /// </remarks>
+    private PreviewFrame? _lastDelivered;
+
     #endregion
 
     /// <summary>
-    /// 有一帧可用。
+    /// 有一帧<b>与上次不同</b>的可用。
     /// </summary>
     /// <remarks>
     /// <b>在界面线程上触发</b>，订阅方可直接改绑定属性。这与 <see cref="LogStreamService.Emitted"/>
     /// 不同（那个在写入线程上触发、订阅方自行调度）—— 本类存在的意义正是把这一步做掉，
     /// 否则它和一条直通的事件没有区别。
+    /// <para>
+    /// 注意它<b>不是"每来一帧响一次"</b>：内容没变的帧不再往下投，见 <see cref="_lastDelivered"/>。
+    /// </para>
     /// </remarks>
     public event EventHandler<PreviewFrame>? FrameAvailable;
 
@@ -81,6 +103,9 @@ public sealed class PreviewFrameStream : IDisposable
 
         // 已经排队的那次投递会取到 null，自然成为空操作。
         Interlocked.Exchange(ref _pending, null);
+
+        // 一并忘掉"上一次投的是什么"：下一场预览的帧都是新对象，留着它没有意义。
+        _lastDelivered = null;
     }
 
     /// <summary>
@@ -137,6 +162,13 @@ public sealed class PreviewFrameStream : IDisposable
             return;
         }
 
+        // 补帧重发的是同一个帧对象 —— 内容没变，就不去打扰订阅者。
+        if (ReferenceEquals(frame, _lastDelivered))
+        {
+            return;
+        }
+
+        _lastDelivered = frame;
         FrameAvailable?.Invoke(this, frame);
     }
 
