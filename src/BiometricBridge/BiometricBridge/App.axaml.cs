@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls;
@@ -7,6 +8,7 @@ using BiometricBridge.Common;
 using BiometricBridge.Core;
 using BiometricBridge.Core.Models;
 using BiometricBridge.Device;
+using BiometricBridge.ViewModels;
 using BiometricBridge.Views;
 using DryIoc;
 using Microsoft.Extensions.Configuration;
@@ -21,6 +23,17 @@ namespace BiometricBridge;
 public class App : PrismApplication
 {
     private IConfiguration _configuration = new ConfigurationManager();
+
+    /// <summary>
+    /// 进程内日志流。在 <see cref="ConfigLog"/> 里由 <see cref="LogStreamSink"/> 接手写入，在 <see cref="RegisterTypes"/>
+    /// 里登记给容器，于是日志视图与日志写入看到的是同一个实例。
+    /// </summary>
+    /// <remarks>
+    /// 由 App 持有实例而非交给容器构造：日志管线必须在 <c>base.Initialize()</c> 之前就绪 —— 容器、壳与设备装饰器
+    /// 都在那里面构造，而壳构造时会用上日志（日志视图要快照存量，装饰器要取 logger）。那一刻容器还不存在，
+    /// 因此只能先建实例、再登记。
+    /// </remarks>
+    private readonly LogStreamService _logStream = new();
 
     public override void Initialize()
     {
@@ -80,12 +93,26 @@ public class App : PrismApplication
     {
         containerRegistry.RegisterSingleton<BiometricDeviceManager>();
 
+        // 必须是单例：列表与控制面板两个 VM 要共享同一个选中项，transient 会让它们各拿一份。
+        containerRegistry.RegisterSingleton<DeviceSelectionService>();
+
+        // 日志流单例：ConfigLog 已让 LogStreamSink 往里写，这里登记同一个实例供日志视图注入。
+        // 本项目唯一一处 RegisterInstance —— 实例必须先于容器存在（见 _logStream 的说明），容器只登记不构造。
+        containerRegistry.RegisterInstance(_logStream);
+
         // 装饰器由容器原生接管：装饰器构造函数注入 IBiometricDevice，DryIoc 会把被装饰的实现传进去。
         // 这样新增设备类型时装饰器自动生效，无需在此处逐个登记。
         var container = containerRegistry.GetContainer();
-        container.Register<IBiometricDevice, FCK3L>();
+        // container.Register<IBiometricDevice, FCK3L>();
         container.Register<IBiometricDevice, EyeIrisDevice>();
-        container.Register<IBiometricDevice, SerializingDeviceDecorator>(setup: Setup.Decorator);
+
+        // 装饰链：order 越大离真实设备越远。串行化贴着设备（在锁内做真正的原生调用），
+        // 日志在最外层，于是耗时含排队等待，"等锁期间被取消"也能留痕。
+        // 显式给 order 而不靠注册先后：默认 order 为 0 时按注册顺序定层，日后调整注册顺序会悄悄改变装配层级。
+        container.Register<IBiometricDevice, SerializingDeviceDecorator>(
+            setup: Setup.DecoratorWith(_ => true, order: 0));
+        container.Register<IBiometricDevice, LoggingDeviceDecorator>(
+            setup: Setup.DecoratorWith(_ => true, order: 1));
 
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
     }
@@ -96,7 +123,13 @@ public class App : PrismApplication
     private void InitConfig()
     {
         var configurationManager = new ConfigurationManager();
-        configurationManager.AddYamlFile(@".\Configs\serilog.yaml", optional: true, reloadOnChange: true);
+
+        // 用程序集目录而非相对路径：运行配置的工作目录不一定是输出目录（Rider 默认可能是项目目录），
+        // 相对路径会让配置文件读不到，而 optional: true 会把这件事静默吞掉 —— 一个 sink 都绑不上。
+        configurationManager.AddYamlFile(
+            Path.Combine(AppContext.BaseDirectory, "Configs", "serilog.yaml"),
+            optional: true,
+            reloadOnChange: true);
         _configuration = configurationManager;
     }
 
@@ -107,7 +140,15 @@ public class App : PrismApplication
     {
         var loggerConfiguration = new LoggerConfiguration();
         loggerConfiguration.ReadFrom.Configuration(_configuration);
+
+        // 额外挂一个进程内日志流：给界面一个运行期日志源。与配置文件里的文件 sink 并行，互不影响。
+        // 适配器在此构造而不写进 serilog.yaml：它要写入应用自己的服务，配置型 sink 拿不到（见 LogStreamSink 的说明）。
+        loggerConfiguration.WriteTo.Sink(new LogStreamSink(_logStream));
+
         Log.Logger = loggerConfiguration.CreateLogger();
+
+        // 一条启动日志：日志视图在此之前是空的，这行让它有个可见的起点。
+        Log.Information("BiometricBridge 启动，运行期日志已就绪");
     }
 
     protected override AvaloniaObject CreateShell()

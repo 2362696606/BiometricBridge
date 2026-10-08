@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using Avalonia.Threading;
 using BiometricBridge.Common;
@@ -12,11 +13,14 @@ public partial class DeviceListViewModel : ObservableObject
 
     private readonly BiometricDeviceManager _deviceManager;
 
+    private readonly DeviceSelectionService _selection;
+
     #endregion
 
-    public DeviceListViewModel(BiometricDeviceManager deviceManager)
+    public DeviceListViewModel(BiometricDeviceManager deviceManager, DeviceSelectionService selection)
     {
         _deviceManager = deviceManager;
+        _selection = selection;
 
         foreach (var snapshot in deviceManager.GetDeviceSnapshots())
         {
@@ -32,6 +36,9 @@ public partial class DeviceListViewModel : ObservableObject
         // 正确的修法不是在 VM 上实现 IDisposable（Prism 不缓存 VM 实例、容器也不会被释放，
         // 那个 Dispose 永远不会被调到），而是在视图的 DetachedFromVisualTree 里退订。
         _deviceManager.DeviceStateChanged += OnDeviceStateChanged;
+
+        // 选中项的写入端在本列表（用户在列表里选择），服务再把它交给控制面板。
+        _selection.PropertyChanged += OnSelectionChanged;
     }
 
     #region ObservableProperties
@@ -42,11 +49,37 @@ public partial class DeviceListViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<DeviceInfoItemViewModel> _devices = [];
 
     /// <summary>
-    /// 选中的设备id
+    /// 选中的设备。读写都转发到共享的 <see cref="DeviceSelectionService"/>，
+    /// 使本列表与设备控制面板作用于同一台设备（同一个列表项实例）。
     /// </summary>
-    [ObservableProperty] private DeviceInfoItemViewModel? _selectedDeviceItem;
+    public DeviceInfoItemViewModel? SelectedDeviceItem
+    {
+        get => _selection.SelectedDeviceItem;
+        set => _selection.SelectedDeviceItem = value;
+    }
 
     #endregion
+
+    /// <summary>
+    /// 共享选中项被改写：重发本属性，让列表的 SelectedItem 跟随。
+    /// </summary>
+    /// <param name="sender">
+    /// 事件源。
+    /// </param>
+    /// <param name="e">
+    /// 事件参数。
+    /// </param>
+    /// <remarks>
+    /// 用户在本列表选择时，setter 已写入服务，服务再回抛本事件；此处只是让绑定重读 getter，
+    /// 值相同不会造成循环。
+    /// </remarks>
+    private void OnSelectionChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(DeviceSelectionService.SelectedDeviceItem))
+        {
+            OnPropertyChanged(nameof(SelectedDeviceItem));
+        }
+    }
 
     /// <summary>
     /// 设备状态变化：更新对应列表项。

@@ -1,0 +1,102 @@
+<UserControl
+    d:DesignHeight="200"
+    d:DesignWidth="800"
+    mc:Ignorable="d"
+    mvvm:ViewModelLocator.AutoWireViewModel="True"
+    x:Class="BiometricBridge.Views.LogView"
+    x:DataType="viewModels:LogViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:common="clr-namespace:BiometricBridge.Common"
+    xmlns:conv="using:Avalonia.Data.Converters"
+    xmlns:converters="clr-namespace:BiometricBridge.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:mvvm="http://prismlibrary.com/"
+    xmlns:viewModels="clr-namespace:BiometricBridge.ViewModels"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid RowDefinitions="Auto,*">
+        <!--  工具条  -->
+        <Grid
+            ColumnDefinitions="Auto,Auto,*"
+            Grid.Row="0"
+            Margin="8,6">
+            <TextBlock
+                FontWeight="SemiBold"
+                Text="日志"
+                VerticalAlignment="Center" />
+            <Button
+                Grid.Column="1"
+                Margin="8,0,0,0"
+                Command="{Binding ClearCommand}"
+                Content="清空" />
+            <TextBlock
+                Grid.Column="2"
+                Margin="8,0,0,0"
+                Foreground="{DynamicResource SemiColorText2}"
+                Text="{Binding Logs.Count, StringFormat='共 {0} 条'}"
+                VerticalAlignment="Center" />
+        </Grid>
+
+        <!--  名字 LogList 由 LogView.axaml.cs 在运行时查找，用于新行自动滚底；改名会让滚动退化为不生效  -->
+        <ListBox
+            x:Name="LogList"
+            Grid.Row="1"
+            ItemsSource="{Binding Logs}">
+            <ListBox.Styles>
+                <!--  行紧凑些；日志行不需要默认的那么大点击区  -->
+                <Style Selector="ListBoxItem">
+                    <Setter Property="MinHeight" Value="0" />
+                    <Setter Property="Padding" Value="8,2" />
+                </Style>
+                <!--
+                    级别配色。颜色一律取自 Ursa 的 Semi 主题动态资源，随明/暗主题自动切换，不写死色值。
+                    默认主文本色，warning / danger 两组在其上覆盖；类的来源见下面级别的 Classes 绑定。
+                -->
+                <Style Selector="TextBlock.level">
+                    <Setter Property="Foreground" Value="{DynamicResource SemiColorText0}" />
+                </Style>
+                <Style Selector="TextBlock.level.warning">
+                    <Setter Property="Foreground" Value="{DynamicResource SemiColorWarning}" />
+                </Style>
+                <Style Selector="TextBlock.level.error">
+                    <Setter Property="Foreground" Value="{DynamicResource SemiColorDanger}" />
+                </Style>
+            </ListBox.Styles>
+
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="common:LogEntry">
+                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                        <TextBlock
+                            FontFamily="Consolas"
+                            Foreground="{DynamicResource SemiColorText2}"
+                            Grid.Column="0"
+                            Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss.fff}'}" />
+                        <!--  Classes.error / .warning 由转换器产出 bool，命中即挂上对应类，样式见 ListBox.Styles  -->
+                        <TextBlock
+                            Classes="level"
+                            Classes.error="{Binding Level, Converter={x:Static converters:LogLevelMatchConverter.Instance}, ConverterParameter=Error}"
+                            Classes.warning="{Binding Level, Converter={x:Static converters:LogLevelMatchConverter.Instance}, ConverterParameter=Warning}"
+                            Grid.Column="1"
+                            Text="{Binding Level}" />
+                        <TextBlock
+                            Grid.Column="2"
+                            Text="{Binding Message}"
+                            TextTrimming="CharacterEllipsis">
+                            <!--  行内放不下时，悬停看完整消息与异常  -->
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding Message}" />
+                                    <TextBlock
+                                        FontFamily="Consolas"
+                                        IsVisible="{Binding Exception, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                        Text="{Binding Exception}" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                        </TextBlock>
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </Grid>
+</UserControl>

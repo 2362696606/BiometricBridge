@@ -58,7 +58,7 @@ public sealed class BiometricDeviceManager : IAsyncDisposable
     #region Events
 
     /// <summary>
-    /// 设备状态发生变化时触发（连接、断开成功后各一次）。
+    /// 设备状态发生变化时触发（连接、断开成功后，或手动设置状态后，各一次）。
     /// </summary>
     /// <remarks>
     /// 在设备调用完成的线程上同步触发（见类型说明），事件参数已含变更后的完整快照，订阅方无需回头查询。
@@ -126,6 +126,35 @@ public sealed class BiometricDeviceManager : IAsyncDisposable
     {
         var managedDevice = Resolve(deviceId);
         await managedDevice.Device.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+        OnDeviceStateChanged(deviceId, managedDevice);
+    }
+
+    /// <summary>
+    /// 手动设置设备状态。
+    /// </summary>
+    /// <param name="deviceId">
+    /// 设备 id。
+    /// </param>
+    /// <param name="status">
+    /// 目标状态。
+    /// </param>
+    /// <exception cref="KeyNotFoundException">
+    /// 设备 id 不存在。
+    /// </exception>
+    /// <remarks>
+    /// 同步：不触碰设备，只改管理器持有的状态并广播。值未变时不发事件 —— 与"状态真的变了才通知"
+    /// 一致，也让调用方可以放心地把"回填当前值"这类动作写回来（自动退化为空操作）。
+    /// 线程同 <see cref="ConnectAsync"/> 的说明：事件在调用线程上同步触发。
+    /// </remarks>
+    public void SetDeviceStatus(Guid deviceId, BiometricDeviceStatus status)
+    {
+        var managedDevice = Resolve(deviceId);
+        if (managedDevice.DeviceStatus == status)
+        {
+            return;
+        }
+
+        managedDevice.DeviceStatus = status;
         OnDeviceStateChanged(deviceId, managedDevice);
     }
 

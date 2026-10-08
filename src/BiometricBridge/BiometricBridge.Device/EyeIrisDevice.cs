@@ -112,8 +112,13 @@ public class EyeIrisDevice : IBiometricDevice
 
         var serialNo = await Task.Run(() =>
         {
+            // attach 方式与厂商自带的三个示例（C++、C# 各一份）保持一致：SLEEP | NET。
+            // 用普通的 AttachNormal(0) 实测直接以 BioSPI_DEVICE_ERR_OPEN(102) 失败，
+            // 而同一台设备、同一个 eye_iris_platform.dll 在示例里用这组标志能连上。
             var code = EyeIrisPlatformApi.biospi_attach(
-                EyeIrisPlatformApi.AttachNormal, IntPtr.Zero, null);
+                EyeIrisPlatformApi.AttachNormalSleep | EyeIrisPlatformApi.AttachNormalNet,
+                IntPtr.Zero,
+                null);
             if (code != EyeIrisPlatformApi.NoError)
             {
                 // 头文件：连接失败后须先 detach 才能重试。不在此复位，下次 ConnectAsync
@@ -123,15 +128,17 @@ public class EyeIrisDevice : IBiometricDevice
             }
 
             // 结构体含数组字段，须调用前给每个数组字段赋好实例，否则封送失败。
+            // 数组字段须与头文件 BioSPI_DEVICE 的 6 个 char[260] + 2 个 int[260] 一一对应，漏一个就会越界。
             var device = new EyeIrisPlatformApi.BioSpiDevice
             {
                 VendorCode = new byte[EyeIrisPlatformApi.VersionBufferLength],
                 DeviceType = new byte[EyeIrisPlatformApi.VersionBufferLength],
                 DeviceNum = new byte[EyeIrisPlatformApi.VersionBufferLength],
                 DeviceModel = new byte[EyeIrisPlatformApi.VersionBufferLength],
-                ReservedInfo1 = new byte[EyeIrisPlatformApi.VersionBufferLength],
-                ReservedInfo2 = new int[EyeIrisPlatformApi.VersionBufferLength],
-                ReservedInfo3 = new int[EyeIrisPlatformApi.VersionBufferLength],
+                ReservedCharInfo1 = new byte[EyeIrisPlatformApi.VersionBufferLength],
+                ReservedCharInfo2 = new byte[EyeIrisPlatformApi.VersionBufferLength],
+                ReservedIntInfo1 = new int[EyeIrisPlatformApi.VersionBufferLength],
+                ReservedIntInfo2 = new int[EyeIrisPlatformApi.VersionBufferLength],
             };
 
             code = EyeIrisPlatformApi.biospi_device_info(ref device);

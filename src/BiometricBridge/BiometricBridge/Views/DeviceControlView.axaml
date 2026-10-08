@@ -2,10 +2,41 @@
     d:DesignHeight="450"
     d:DesignWidth="200"
     mc:Ignorable="d"
+    mvvm:ViewModelLocator.AutoWireViewModel="True"
     x:Class="BiometricBridge.Views.DeviceControlView"
+    x:DataType="viewModels:DeviceControlViewModel"
     xmlns="https://github.com/avaloniaui"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:enums="clr-namespace:BiometricBridge.Core.Models.Enums;assembly=BiometricBridge.Core"
+    xmlns:markup="clr-namespace:BiometricBridge.Markup"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:mvvm="http://prismlibrary.com/"
+    xmlns:viewModels="clr-namespace:BiometricBridge.ViewModels"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    设备控制视图
+
+    <StackPanel Margin="12" Spacing="12">
+        <TextBlock FontWeight="SemiBold" Text="设备控制" />
+
+        <!--  当前选中设备；未选中时给出提示  -->
+        <TextBlock
+            IsVisible="{Binding !HasSelection}"
+            Text="未选择设备，请在左侧列表中选择。" />
+        <TextBlock
+            FontFamily="Consolas"
+            IsVisible="{Binding HasSelection}"
+            Text="{Binding SelectedDeviceItem.DeviceId, StringFormat='设备：{0}'}" />
+
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Command="{Binding ConnectCommand}" Content="连接" />
+            <Button Command="{Binding DisconnectCommand}" Content="断开" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="状态" VerticalAlignment="Center" />
+            <ComboBox
+                IsEnabled="{Binding HasSelection}"
+                ItemsSource="{markup:EnumValues {x:Type enums:BiometricDeviceStatus}}"
+                SelectedItem="{Binding DeviceStatus, Mode=TwoWay}" />
+        </StackPanel>
+    </StackPanel>
 </UserControl>

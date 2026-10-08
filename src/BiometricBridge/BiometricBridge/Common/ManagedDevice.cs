@@ -21,8 +21,10 @@ internal sealed class ManagedDevice
     /// 设备状态。
     /// </summary>
     /// <remarks>
-    /// 恒为 <see cref="BiometricDeviceStatus.Ready"/>：设备层没有忙/未就绪的语义，管理器只转发调用、
-    /// 不制造状态迁移。用 init 而非 set，让这一点成为编译期约束。
+    /// 仅管理器可写：本类型是 internal，且唯一调用方就是 <see cref="BiometricDeviceManager"/>，
+    /// 故 set 的可达范围仍被限制在管理器内。状态的唯一迁移来源是管理器的
+    /// <see cref="BiometricDeviceManager.SetDeviceStatus"/>（手动设置）—— 设备层没有忙/未就绪的语义，
+    /// 管理器只转发调用，不自行制造迁移。
     /// </remarks>
-    internal BiometricDeviceStatus DeviceStatus { get; init; } = BiometricDeviceStatus.Ready;
+    internal BiometricDeviceStatus DeviceStatus { get; set; } = BiometricDeviceStatus.Ready;
 }

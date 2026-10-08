@@ -661,6 +661,12 @@ public static class EyeIrisPlatformApi
     /// <summary>
     /// 连接类型：普通应用程连接。
     /// </summary>
+    /// <remarks>
+    /// <b>别拿它当默认连接方式。</b>实测（同一台设备、同一个 <c>eye_iris_platform.dll</c>）
+    /// 此值会让 <see cref="biospi_attach"/> 以 <c>BioSPI_DEVICE_ERR_OPEN</c>(102) 失败；
+    /// 厂商自带的三个示例一律用 <see cref="AttachNormalSleep"/> | <see cref="AttachNormalNet"/>，
+    /// <c>EyeIrisDevice</c> 也随之改用那一组。
+    /// </remarks>
     internal const int AttachNormal = 0;
 
     /// <summary>
@@ -1804,13 +1810,19 @@ public static class EyeIrisPlatformApi
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 由 <see cref="biospi_device_info"/> 填充。5 个 <c>char[260]</c> 加 2 个 <c>int[260]</c>，
-    /// 共 3380 字节。
+    /// 由 <see cref="biospi_device_info"/> 填充。头文件是 <b>6 个 <c>char[260]</c> 加 2 个 <c>int[260]</c>，
+    /// 共 3640 字节</b>：四个字符串字段（厂商代码 / 型号代码 / 设备编号 / 型号名）加两个 <c>char</c>
+    /// 保留数组（<c>cReservedInfo1</c>、<c>cReservedInfo2</c>），再加两个 <c>int</c> 保留数组
+    /// （<c>nReservedInfo1</c>、<c>nReservedInfo2</c>）。
     /// </para>
     /// <para>
-    /// 头文件里前两组是 <c>char</c> 数组（ANSI 字符串），后两组是 <c>int</c> 数组，
-    /// 顺序不能调换。因为是 <c>ref</c> 传入的结构，<b>调用前须先给全部数组字段赋好实例</b>，
-    /// 否则封送会失败——这正是不把数组拆成逐个字段的原因（260 个字段不现实）。
+    /// 字段的个数、顺序、类型必须与头文件<b>逐一对应</b>：这里少一个数组、或把某个 <c>char</c> 数组写成
+    /// <c>int</c> 数组，结构就会比原生小，原生写入即越界（x64 上是进程直接崩溃，托管侧 catch 不到），
+    /// 且越界点之后所有字段的偏移全错。
+    /// </para>
+    /// <para>
+    /// 因为是 <c>ref</c> 传入的结构，<b>调用前须先给全部数组字段赋好实例</b>，否则封送会失败 ——
+    /// 这正是不把数组拆成逐个字段的原因（260 个字段不现实）。
     /// </para>
     /// <para>
     /// 字符串字段的编码取 ANSI。厂商未说明是否为 UTF-8；若读到乱码，先怀疑这里。
@@ -1820,47 +1832,58 @@ public static class EyeIrisPlatformApi
     internal struct BioSpiDevice
     {
         /// <summary>
-        /// 设备厂商代码。
+        /// 设备厂商代码，对应头文件 <c>vendorCode</c>。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
         internal byte[] VendorCode;
 
         /// <summary>
-        /// 设备型号代码。头文件给出的取值：01 移动虹膜识别设备、02 虹膜识别一体机、
-        /// 03 身份验证终端、04 手持机、05 远距离虹膜采集识别设备、06 虹膜门禁、
+        /// 设备型号代码，对应头文件 <c>deviceType</c>。头文件给出的取值：01 移动虹膜识别设备、
+        /// 02 虹膜识别一体机、03 身份验证终端、04 手持机、05 远距离虹膜采集识别设备、06 虹膜门禁、
         /// 07 虹膜闸机、08 人脸+虹膜设备、99 其他。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
         internal byte[] DeviceType;
 
         /// <summary>
-        /// 设备编号（序列号）。
+        /// 设备编号（序列号），对应头文件 <c>deviceNum</c>。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
         internal byte[] DeviceNum;
 
         /// <summary>
-        /// 设备型号名称。
+        /// 设备型号名称，对应头文件 <c>deviceModel</c>。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
         internal byte[] DeviceModel;
 
         /// <summary>
-        /// 保留信息 1。
+        /// 字符型保留信息 1，对应头文件 <c>cReservedInfo1</c>。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
-        internal byte[] ReservedInfo1;
+        internal byte[] ReservedCharInfo1;
 
         /// <summary>
-        /// 保留信息 2。
+        /// 字符型保留信息 2，对应头文件 <c>cReservedInfo2</c>。
         /// </summary>
+        /// <remarks>
+        /// 这一格曾漏掉：早先把头文件的两个 <c>char</c> 保留数组当作一个，把本字段写成了 <c>int</c> 数组，
+        /// 于是托管结构比原生少 260 字节，<see cref="biospi_device_info"/> 写出即崩。名字带上 Char/Int
+        /// 就是为了让这种错位一眼可见。
+        /// </remarks>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
-        internal int[] ReservedInfo2;
+        internal byte[] ReservedCharInfo2;
 
         /// <summary>
-        /// 保留信息 3。
+        /// 整型保留信息 1，对应头文件 <c>nReservedInfo1</c>。
         /// </summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
-        internal int[] ReservedInfo3;
+        internal int[] ReservedIntInfo1;
+
+        /// <summary>
+        /// 整型保留信息 2，对应头文件 <c>nReservedInfo2</c>。
+        /// </summary>
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = VersionBufferLength)]
+        internal int[] ReservedIntInfo2;
     }
 }

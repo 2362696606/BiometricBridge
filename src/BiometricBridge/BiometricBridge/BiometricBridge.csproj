@@ -47,8 +47,10 @@
 
     <ItemGroup>
       <None Remove="Configs\serilog.yaml" />
-      <Resource Include="Configs\serilog.yaml">
+      <!--  必须是 Content：Resource 是嵌入式资源项，CopyToOutputDirectory 对它无效，
+            配置文件因此从未落到输出目录，Serilog 静默地一个 sink 都没绑上。  -->
+      <Content Include="Configs\serilog.yaml">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      </Resource>
+      </Content>
     </ItemGroup>
 </Project>
