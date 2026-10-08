@@ -13,11 +13,16 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <ListBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDeviceItem}">
-        <ListBox.ItemTemplate>
-            <DataTemplate DataType="viewModels:DeviceInfoItemViewModel">
-                <!--  悬停时展示全部字段  -->
-                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
-                    <ToolTip.Tip>
+        <ListBox.Styles>
+            <!--  提示挂在容器上：整行（含 ListBoxItem 的内边距）都能触发  -->
+            <Style Selector="ListBoxItem">
+                <Setter Property="ToolTip.Tip" Value="{Binding}" />
+            </Style>
+            <!--  ContentTemplate 是 ToolTip 控件自己的属性，只能这样指定，不能写成 ToolTip.ContentTemplate  -->
+            <Style Selector="ToolTip">
+                <Setter Property="ContentTemplate">
+                    <!--  悬停时展示全部字段：ToolTip 的 Content 是 item 的 ViewModel，用这个模板渲染  -->
+                    <DataTemplate DataType="viewModels:DeviceInfoItemViewModel">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{Binding DeviceId, StringFormat='DeviceId：{0}'}" />
                             <TextBlock Text="{Binding Status, StringFormat='状态：{0}'}" />
@@ -32,8 +37,14 @@
                             <TextBlock Text="{Binding Modality, StringFormat='模态：{0}'}" />
                             <TextBlock Text="{Binding SerialNo, StringFormat='SN：{0}'}" />
                         </StackPanel>
-                    </ToolTip.Tip>
+                    </DataTemplate>
+                </Setter>
+            </Style>
+        </ListBox.Styles>
 
+        <ListBox.ItemTemplate>
+            <DataTemplate DataType="viewModels:DeviceInfoItemViewModel">
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
                     <!--  关键信息：DeviceId 与 Status 着重显示  -->
                     <TextBlock
                         FontFamily="Consolas"
