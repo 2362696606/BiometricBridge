@@ -8,6 +8,8 @@ using BiometricBridge.Common;
 using BiometricBridge.Core;
 using BiometricBridge.Core.Models;
 using BiometricBridge.Device;
+using BiometricBridge.Host;
+using BiometricBridge.Host.Http;
 using BiometricBridge.ViewModels;
 using BiometricBridge.Views;
 using DryIoc;
@@ -90,6 +92,18 @@ public class App : PrismApplication
     /// </remarks>
     private void OnApplicationExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
+        // 先掐对外服务再拆设备：它若在跑，正驱动着设备干活，得先让它闭嘴。
+        // 当前没有地方调过 StartAsync，故这里必然是空操作（Stop 幂等）；等界面开关落地后，
+        // 它就是那道"忘了停就退出"的安全网 —— 不至于把还在监听的端口带进进程收尾。
+        try
+        {
+            Container.Resolve<IExternalServiceHost>().StopAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "停止对外服务时出错，忽略并继续退出。");
+        }
+
         Container.Resolve<PreviewFrameStream>().Dispose();
 
         try
@@ -137,6 +151,12 @@ public class App : PrismApplication
             setup: Setup.DecoratorWith(_ => true, order: 2));
 
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
+
+        // 对外服务：只登记、不启动。启停是手动操作（将来由界面开关驱动），
+        // 故这里不该有任何地方调用 StartAsync —— 应用起来时不应悄悄占着监听端口。
+        // 换一种对外服务方式（gRPC、命名管道……）时，只改下面这一行的实现类型。
+        containerRegistry.RegisterSingleton<BridgeStatusService>();
+        containerRegistry.RegisterSingleton<IExternalServiceHost, HttpServiceHost>();
     }
 
     /// <summary>

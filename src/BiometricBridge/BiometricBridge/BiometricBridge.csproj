@@ -38,6 +38,8 @@
     <ItemGroup>
       <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
       <ProjectReference Include="..\BiometricBridge.Device\BiometricBridge.Device.csproj" />
+      <!--  对外服务的宿主。App 只认 Core 里的 IExternalServiceHost 契约，换宿主时改这一行。  -->
+      <ProjectReference Include="..\BiometricBridge.Host.Http\BiometricBridge.Host.Http.csproj" />
     </ItemGroup>
 
     <ItemGroup>

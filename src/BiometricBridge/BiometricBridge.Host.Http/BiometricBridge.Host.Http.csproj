@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!--  嵌入 GUI 进程的库，而非有发布约定的 web 应用，故不用 Microsoft.NET.Sdk.Web。
+              代价：ASP.NET Core 框架引用会随项目引用传到消费方（Android/Browser 头因此无法构建）。  -->
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
+        <ProjectReference Include="..\BiometricBridge.Host\BiometricBridge.Host.csproj" />
+    </ItemGroup>
+
+</Project>
