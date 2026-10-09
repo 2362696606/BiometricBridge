@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Serilog;
 
 namespace BiometricBridge.Host.Http;
 
@@ -112,6 +113,7 @@ public sealed class HttpServiceHost : IExternalServiceHost
             }
 
             var app = BuildApplication();
+
             try
             {
                 await app.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -178,8 +180,13 @@ public sealed class HttpServiceHost : IExternalServiceHost
             EnvironmentName = Environments.Production,
         });
 
-        // Serilog 是本应用唯一的日志通道，不让 Web 宿主自己再开一路。
+        // Serilog 是本应用唯一的日志通道：清掉宿主自带的提供者，再把 Serilog 接上 ——
+        // 于是 Kestrel、MVC 与控制器注入的 ILogger<T> 都汇进应用那一份日志（不接则它们无处可去）。
         builder.Logging.ClearProviders();
+
+        // dispose: false —— Log.Logger 归应用所有。宿主若把它释放掉，停一次服务之后整个应用的日志就哑了
+        // （与容器那个坑同一形状）。默认值恰好也是 false，但别把这件事交给默认值。
+        builder.Logging.AddSerilog(Log.Logger, dispose: false);
 
         builder.WebHost.UseUrls($"{ListenAddress}:{_settings.Port}");
 
