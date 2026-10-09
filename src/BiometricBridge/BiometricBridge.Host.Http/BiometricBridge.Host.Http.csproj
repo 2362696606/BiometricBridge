@@ -13,6 +13,11 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!--  Web 宿主跑在应用容器上，故这里认得 DryIoc。DryIoc.dll 随它传递进来。  -->
+        <PackageReference Include="DryIoc.Microsoft.DependencyInjection" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
         <ProjectReference Include="..\BiometricBridge.Host\BiometricBridge.Host.csproj" />
     </ItemGroup>

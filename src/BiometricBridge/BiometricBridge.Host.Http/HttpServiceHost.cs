@@ -1,6 +1,6 @@
 using BiometricBridge.Core;
-using BiometricBridge.Host;
 using BiometricBridge.Host.Http.Controllers;
+using DryIoc;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,8 +15,12 @@ namespace BiometricBridge.Host.Http;
 /// <remarks>
 /// <para>
 /// 它是 <see cref="IExternalServiceHost"/> 的一种实现，只负责"把服务跑起来"：建 Web 宿主、
-/// 接路由、把功能实例交给它。对外提供什么功能由 <c>BiometricBridge.Host</c> 决定，
+/// 接路由、让它跑在应用容器上。对外提供什么功能由 <c>BiometricBridge.Host</c> 决定，
 /// 换一种服务方式（gRPC、命名管道……）只需另写一个实现，本类与功能层都不动。
+/// </para>
+/// <para>
+/// <b>Web 宿主不另起容器</b>：控制器要的功能实例一律由应用容器解析，故两边看到的是同一批单例 ——
+/// 见 <see cref="AppContainerServiceProviderFactory"/> 与 <see cref="NonOwningServiceProvider"/>。
 /// </para>
 /// <para>
 /// <b>生命周期由调用方手动驱动</b>（不在应用启动时自动起）。两个方法都幂等：重复启动、未启动就停
@@ -45,9 +49,9 @@ public sealed class HttpServiceHost : IExternalServiceHost
     #region Fileds
 
     /// <summary>
-    /// 由应用容器交给宿主的桥接器状态服务，随宿主一起登记进 Web 宿主的容器
+    /// 应用容器。Web 宿主的一切解析都归到它，故两边看到的是同一批单例
     /// </summary>
-    private readonly BridgeStatusService _statusService;
+    private readonly IContainer _container;
 
     /// <summary>
     /// 监听设置，由应用容器注入。与界面控制面板共享同一实例，故面板改的端口这里读得到
@@ -77,21 +81,21 @@ public sealed class HttpServiceHost : IExternalServiceHost
     /// <summary>
     /// 构造函数
     /// </summary>
-    /// <param name="statusService">
-    /// 桥接器状态服务，由应用容器注入
+    /// <param name="container">
+    /// 应用容器，由应用侧注入。DryIoc 认得自己的容器，故不必另行登记
     /// </param>
     /// <param name="settings">
     /// 监听设置，由应用容器注入；与界面控制面板共享同一实例
     /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="statusService"/> 或 <paramref name="settings"/> 为 null
+    /// <paramref name="container"/> 或 <paramref name="settings"/> 为 null
     /// </exception>
-    public HttpServiceHost(BridgeStatusService statusService, HttpHostSettings settings)
+    public HttpServiceHost(IContainer container, HttpHostSettings settings)
     {
-        ArgumentNullException.ThrowIfNull(statusService);
+        ArgumentNullException.ThrowIfNull(container);
         ArgumentNullException.ThrowIfNull(settings);
 
-        _statusService = statusService;
+        _container = container;
         _settings = settings;
     }
 
@@ -179,9 +183,8 @@ public sealed class HttpServiceHost : IExternalServiceHost
 
         builder.WebHost.UseUrls($"{ListenAddress}:{_settings.Port}");
 
-        // DryIoc 容器与 Web 宿主的容器互不相干，缝就是这里：把功能实例登记进去。
-        // 实例重载下 MS.DI 不管释放，归属仍在应用容器。
-        builder.Services.AddSingleton(_statusService);
+        // 换掉宿主自带的 MS.DI 容器，让它用应用容器解析 —— 控制器要的功能实例与应用侧是同一批单例。
+        builder.Host.UseServiceProviderFactory(new AppContainerServiceProviderFactory(_container));
 
         // 必须显式加应用部件：入口程序集是 BiometricBridge.Desktop，MVC 默认只扫入口程序集，
         // 不加的话 Host.Http 里的控制器永远发现不了 —— 表现为请求一律 404，且启动期毫无提示。
