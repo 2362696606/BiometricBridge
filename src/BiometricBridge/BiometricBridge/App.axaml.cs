@@ -152,10 +152,14 @@ public class App : PrismApplication
 
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
 
-        // 对外服务：只登记、不启动。启停是手动操作（将来由界面开关驱动），
+        // 对外服务：只登记、不启动。启停是手动操作（由界面开关驱动），
         // 故这里不该有任何地方调用 StartAsync —— 应用起来时不应悄悄占着监听端口。
         // 换一种对外服务方式（gRPC、命名管道……）时，只改下面这一行的实现类型。
         containerRegistry.RegisterSingleton<BridgeStatusService>();
+
+        // 监听设置：宿主与界面控制面板共享同一实例 —— 宿主读它建监听地址，面板写它。
+        // 必须单例：交给容器按需构造的话两边会各拿一份，面板改的端口到不了宿主。
+        containerRegistry.RegisterSingleton<HttpHostSettings>();
         containerRegistry.RegisterSingleton<IExternalServiceHost, HttpServiceHost>();
     }
 

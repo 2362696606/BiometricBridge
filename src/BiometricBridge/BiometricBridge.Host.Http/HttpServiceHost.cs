@@ -22,19 +22,23 @@ namespace BiometricBridge.Host.Http;
 /// <b>生命周期由调用方手动驱动</b>（不在应用启动时自动起）。两个方法都幂等：重复启动、未启动就停
 /// 都是空操作。故这里不必向外暴露"在不在跑"的状态 —— 那是调用方自己的事。
 /// </para>
+/// <para>
+/// 监听端口来自注入的 <see cref="HttpHostSettings"/>，在 <see cref="BuildApplication"/> 时读取，
+/// 故改端口后需停一次再启才生效。
+/// </para>
 /// </remarks>
 public sealed class HttpServiceHost : IExternalServiceHost
 {
     #region 常量
 
     /// <summary>
-    /// 监听地址。仅回环：本机调用方可达，外部机器不可达
+    /// 监听地址，仅回环：本机调用方可达，外部机器不可达
     /// </summary>
     /// <remarks>
-    /// 写 <c>127.0.0.1</c> 而非 <c>localhost</c>，避开双栈解析差异。地址与端口是骨架期的约定，
-    /// 后续移入配置。
+    /// 写 <c>127.0.0.1</c> 而非 <c>localhost</c>，避开双栈解析差异。端口不写死，启动时由
+    /// <see cref="HttpHostSettings.Port"/> 拼入。
     /// </remarks>
-    private const string ListenUrl = "http://127.0.0.1:5080";
+    private const string ListenAddress = "http://127.0.0.1";
 
     #endregion
 
@@ -44,6 +48,11 @@ public sealed class HttpServiceHost : IExternalServiceHost
     /// 由应用容器交给宿主的桥接器状态服务，随宿主一起登记进 Web 宿主的容器
     /// </summary>
     private readonly BridgeStatusService _statusService;
+
+    /// <summary>
+    /// 监听设置，由应用容器注入。与界面控制面板共享同一实例，故面板改的端口这里读得到
+    /// </summary>
+    private readonly HttpHostSettings _settings;
 
     /// <summary>
     /// 串行化启动与停止。将来界面按钮从 UI 线程调用也安全
@@ -71,14 +80,19 @@ public sealed class HttpServiceHost : IExternalServiceHost
     /// <param name="statusService">
     /// 桥接器状态服务，由应用容器注入
     /// </param>
+    /// <param name="settings">
+    /// 监听设置，由应用容器注入；与界面控制面板共享同一实例
+    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="statusService"/> 为 null
+    /// <paramref name="statusService"/> 或 <paramref name="settings"/> 为 null
     /// </exception>
-    public HttpServiceHost(BridgeStatusService statusService)
+    public HttpServiceHost(BridgeStatusService statusService, HttpHostSettings settings)
     {
         ArgumentNullException.ThrowIfNull(statusService);
+        ArgumentNullException.ThrowIfNull(settings);
 
         _statusService = statusService;
+        _settings = settings;
     }
 
     /// <inheritdoc/>
@@ -154,7 +168,6 @@ public sealed class HttpServiceHost : IExternalServiceHost
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             // 用程序集目录而非相对路径：运行配置的工作目录不一定是输出目录（Rider 默认可能是项目目录）。
-            // 顺带这也是日后的配置缝 —— 输出目录里放个 appsettings.json 即可覆盖监听地址。
             ContentRootPath = AppContext.BaseDirectory,
 
             // 定死环境：免得偶发地以 Development 起来，引入 user-secrets 等不确定性。
@@ -164,7 +177,7 @@ public sealed class HttpServiceHost : IExternalServiceHost
         // Serilog 是本应用唯一的日志通道，不让 Web 宿主自己再开一路。
         builder.Logging.ClearProviders();
 
-        builder.WebHost.UseUrls(ListenUrl);
+        builder.WebHost.UseUrls($"{ListenAddress}:{_settings.Port}");
 
         // DryIoc 容器与 Web 宿主的容器互不相干，缝就是这里：把功能实例登记进去。
         // 实例重载下 MS.DI 不管释放，归属仍在应用容器。

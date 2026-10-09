@@ -1,0 +1,48 @@
+<UserControl
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    mc:Ignorable="d"
+    mvvm:ViewModelLocator.AutoWireViewModel="True"
+    x:Class="BiometricBridge.Views.ExternalServiceControlView"
+    x:DataType="viewModels:ExternalServiceControlViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:mvvm="http://prismlibrary.com/"
+    xmlns:viewModels="clr-namespace:BiometricBridge.ViewModels"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Margin="12" Spacing="8">
+        <TextBlock FontWeight="SemiBold" Text="对外服务" />
+        <StackPanel Orientation="Horizontal">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <!--
+                    SBI 服务仅回环，端口限定在 HttpHostSettings 里约定的那一段。
+                    现阶段只有 HTTP 一个宿主，故端口直接写在这里；将来换宿主类型（如 Android Intent，
+                    参数不同）时，整块替换成按类型选模板的 ContentControl 即可，下面的状态与启停按钮不动。
+                -->
+                <TextBlock Text="端口" VerticalAlignment="Center" />
+                <!--  FormatString="0" 去掉显示上的小数位，ParsingNumberStyle 只收整数，端口本就是整数  -->
+                <NumericUpDown
+                    FormatString="0"
+                    IsEnabled="{Binding !IsRunning}"
+                    Maximum="{Binding Settings.MaxPort}"
+                    Minimum="{Binding Settings.MinPort}"
+                    ParsingNumberStyle="Integer"
+                    Value="{Binding Settings.Port, Mode=TwoWay}"
+                    Width="120" />
+                <!--  端口非法时提示；合法时留白  -->
+                <TextBlock
+                    Foreground="{DynamicResource SemiColorDanger}"
+                    IsVisible="{Binding !Settings.IsValid}"
+                    Text="{Binding Settings.PortRangeHint}"
+                    VerticalAlignment="Center" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding StatusText, StringFormat='状态：{0}'}" VerticalAlignment="Center" />
+                <Button Command="{Binding ToggleCommand}" Content="{Binding ToggleButtonText}" />
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>
