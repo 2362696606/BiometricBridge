@@ -9,7 +9,11 @@ using BiometricBridge.Core;
 using BiometricBridge.Core.Models;
 using BiometricBridge.Device;
 using BiometricBridge.Host;
+using BiometricBridge.Host.Config;
+using BiometricBridge.Host.Crypto;
 using BiometricBridge.Host.Http;
+using BiometricBridge.Host.Http.Iso;
+using BiometricBridge.Host.Iso;
 using BiometricBridge.ViewModels;
 using BiometricBridge.Views;
 using DryIoc;
@@ -25,6 +29,11 @@ namespace BiometricBridge;
 public class App : PrismApplication
 {
     private IConfiguration _configuration = new ConfigurationManager();
+
+    /// <summary>
+    /// MOSIP 侧设置。在 <see cref="InitConfig"/> 里由 sbi.yaml 装填，在 <see cref="RegisterTypes"/> 里交给容器。
+    /// </summary>
+    private MosipOptions _mosipOptions = new();
 
     /// <summary>
     /// 进程内日志流。在 <see cref="ConfigLog"/> 里由 <see cref="LogStreamSink"/> 接手写入，在 <see cref="RegisterTypes"/>
@@ -150,12 +159,52 @@ public class App : PrismApplication
         container.Register<IBiometricDevice, PacingDeviceDecorator>(
             setup: Setup.DecoratorWith(_ => true, order: 2));
 
+        // 设备清单：宿主层的设备发现只认 IDeviceInventory，故把该接口映射到上面那个管理器单例。
+        // 必须用 RegisterMapping 而不是 RegisterSingleton<IDeviceInventory, BiometricDeviceManager>() ——
+        // 后者会让容器再造一个管理器，设备状态与预览随之分成两份。映射不新建实例。
+        container.RegisterMapping<IDeviceInventory, BiometricDeviceManager>();
+
+        // 设备采集：注册采集端点经它落到设备上。同样用 RegisterMapping 映射到上面那个管理器单例 ——
+        // 采集与清单看到的是同一批设备，不能各造一份。
+        container.RegisterMapping<IDeviceCapture, BiometricDeviceManager>();
+
+        // 设备预览：推流端点经它起/停预览。映射到同一管理器单例：预览的交由它仲裁。
+        container.RegisterMapping<IDevicePreview, BiometricDeviceManager>();
+
         containerRegistry.Register<ISlapSegmenter, IctSlapSegmenter>();
 
         // 对外服务：只登记、不启动。启停是手动操作（由界面开关驱动），
         // 故这里不该有任何地方调用 StartAsync —— 应用起来时不应悄悄占着监听端口。
         // 换一种对外服务方式（gRPC、命名管道……）时，只改下面这一行的实现类型。
         containerRegistry.RegisterSingleton<BridgeStatusService>();
+
+        // SBI 设备发现：控制器经它拼装发现响应，它再经 IDeviceInventory 拿设备清单。无状态，单例即可。
+        containerRegistry.RegisterSingleton<DeviceDiscoveryService>();
+
+        // SBI 签名与设备信息：DP 材料用于签发设备证书，故 /info 的 deviceInfo 是签过名的。
+        containerRegistry.RegisterInstance(_mosipOptions);
+
+        // DP 签发器懒构造：材料缺失或配置写错时不该在启动期崩，而应表现为 /info 的 500。
+        // 单例且不释放 —— JWS 头的 x5c 链里含 DP 证书，它要活满整个进程。
+        container.RegisterDelegate<IDeviceCertificateIssuer>(
+            resolver => CreateDeviceCertificateIssuer(resolver.Resolve<MosipOptions>()), Reuse.Singleton);
+
+        // 设备密钥按需生成（设备证书的 CN 是序列号，只有连上后才知道），故按身份缓存，见 DeviceSignerProvider。
+        container.Register<DeviceSignerProvider>(Reuse.Singleton);
+        containerRegistry.RegisterSingleton<DeviceInfoService>();
+
+        // 虹膜图像的 JPEG2000 编码器：实现带平台原生库，故抽象在 Host、实现在 Host.Http，
+        // 由这里接上。无状态，单例即可。
+        containerRegistry.RegisterSingleton<IJpeg2000Encoder, MagickJpeg2000Encoder>();
+
+        // SBI 注册采集：控制器经它采数据并拼响应。无状态，单例即可。
+        containerRegistry.RegisterSingleton<RegistrationCaptureService>();
+
+        // SBI 预览推流：控制器经它选定要推流的设备。无状态，单例即可。
+        containerRegistry.RegisterSingleton<PreviewStreamService>();
+
+        // 设备证书的更换入口：界面上的"更换证书"按钮经它走到签发器。
+        containerRegistry.RegisterSingleton<DeviceCertificateService>();
 
         // 监听设置：宿主与界面控制面板共享同一实例 —— 宿主读它建监听地址，面板写它。
         // 必须单例：交给容器按需构造的话两边会各拿一份，面板改的端口到不了宿主。
@@ -176,8 +225,62 @@ public class App : PrismApplication
             Path.Combine(AppContext.BaseDirectory, "Configs", "serilog.yaml"),
             optional: true,
             reloadOnChange: true);
+
+        // SBI 的 MOSIP 侧设置（DP 材料位置等）。同样 optional：文件缺失时退回 MosipOptions 的内置默认值，
+        // 缺材料这件事到首次签名时才有定论，不该在启动期就拦住整个应用。
+        configurationManager.AddYamlFile(
+            Path.Combine(AppContext.BaseDirectory, "Configs", "sbi.yaml"),
+            optional: true,
+            reloadOnChange: true);
+
         _configuration = configurationManager;
+        _mosipOptions = BuildMosipOptions(configurationManager);
     }
+
+    /// <summary>
+    /// 从配置装填 MOSIP 侧设置。
+    /// </summary>
+    /// <param name="configuration">
+    /// 配置。缺键时退回 <see cref="MosipOptions"/> 的默认值。
+    /// </param>
+    /// <returns>
+    /// MOSIP 侧设置。
+    /// </returns>
+    private static MosipOptions BuildMosipOptions(IConfiguration configuration)
+    {
+        var defaults = new MosipOptions();
+
+        return new MosipOptions
+        {
+            DeviceProviderPath = configuration["mosip:deviceProviderPath"] ?? defaults.DeviceProviderPath,
+            DeviceProviderCertFile = configuration["mosip:deviceProviderCertFile"] ?? defaults.DeviceProviderCertFile,
+            DeviceProviderKeyFile = configuration["mosip:deviceProviderKeyFile"] ?? defaults.DeviceProviderKeyFile,
+            DeviceProviderKeyPassword =
+                configuration["mosip:deviceProviderKeyPassword"] ?? defaults.DeviceProviderKeyPassword,
+            Env = configuration["mosip:env"] ?? defaults.Env,
+        };
+    }
+
+    /// <summary>
+    /// 建 DP 证书签发器。
+    /// </summary>
+    /// <param name="options">
+    /// MOSIP 侧设置，提供材料位置与私钥口令。
+    /// </param>
+    /// <returns>
+    /// 签发器。
+    /// </returns>
+    /// <remarks>
+    /// 材料目录经 <see cref="SbiMaterialDirectory"/> 解析：工作目录与应用输出目录都试，
+    /// 免得 `dotnet run` 与 IDE 启动两种方式里有一种找不到材料。
+    /// </remarks>
+    private static IDeviceCertificateIssuer CreateDeviceCertificateIssuer(MosipOptions options)
+        => new DpCertIssuer(
+            SbiMaterialDirectory.Resolve(options.DeviceProviderPath),
+            options.DeviceProviderCertFile,
+            options.DeviceProviderKeyFile,
+            options.DeviceProviderKeyPassword,
+            TimeProvider.System);
 
     /// <summary>
     /// 配置日志

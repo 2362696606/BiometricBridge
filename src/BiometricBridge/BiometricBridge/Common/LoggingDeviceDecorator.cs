@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -100,11 +101,36 @@ public sealed class LoggingDeviceDecorator : IBiometricDeviceDecorator
     }
 
     /// <inheritdoc/>
-    public Task<IReadOnlyList<CaptureResult>> CaptureAsync(
+    /// <remarks>
+    /// 比通用的操作日志多记两样：<b>请求要采什么</b>（模态／部位／分组／枚数）与<b>结果采到了什么</b>
+    /// （逐枚的部位与质量分）。排"没采到"这类问题时，光看操作名与耗时判断不了是"请求要的部位设备
+    /// 根本给不出"，还是"镜头前没有人" —— 两者的处置完全不同，而这两种信息只有装饰器这一层同时看得到。
+    /// </remarks>
+    public async Task<IReadOnlyList<CaptureResult>> CaptureAsync(
         CaptureRequest request,
         CancellationToken cancellationToken = default)
     {
-        return RunAsync("Capture", () => InnerDevice.CaptureAsync(request, cancellationToken));
+        ArgumentNullException.ThrowIfNull(request);
+
+        _logger.Information(
+            "采集请求：模态 {Modality}，部位 [{Positions}]，分组 {Group}，枚数 {Count}，超时 {Timeout} ms，期望质量分 {RequestedScore}",
+            request.Modality,
+            string.Join(", ", request.Positions),
+            request.Group,
+            request.Count,
+            request.Timeout,
+            request.RequestedScore);
+
+        var results = await RunAsync(
+            "Capture",
+            () => InnerDevice.CaptureAsync(request, cancellationToken)).ConfigureAwait(false);
+
+        _logger.Information(
+            "采集结果：{ResultCount} 枚，逐枚「部位／质量分」= {Results}",
+            results.Count,
+            string.Join("; ", results.Select(result => $"{result.Position?.ToString() ?? "null"}／{result.QualityScore}")));
+
+        return results;
     }
 
     /// <inheritdoc/>

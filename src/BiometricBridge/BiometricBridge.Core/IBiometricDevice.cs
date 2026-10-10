@@ -53,6 +53,9 @@ public interface IBiometricDevice : IAsyncDisposable
     /// <exception cref="InvalidOperationException">
     /// 设备未连接
     /// </exception>
+    /// <exception cref="BiometricNotDetectedException">
+    /// 采集跑完却没拿到可用帧（镜头／压板前没有东西），与"设备未就绪"不是一回事
+    /// </exception>
     Task<IReadOnlyList<CaptureResult>> CaptureAsync(
         CaptureRequest request,
         CancellationToken cancellationToken = default);

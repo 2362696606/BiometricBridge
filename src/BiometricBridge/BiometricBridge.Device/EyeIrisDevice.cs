@@ -31,13 +31,19 @@ namespace BiometricBridge.Device;
 /// </para>
 /// </remarks>
 [IrisDeviceInfo(
-    // TODO: Make 与 Model 是占位值；拿到 MOSIP 的注册信息后连同 DeviceProvider/DeviceProviderId 一并替换。
+    // TODO: Make 与 Model 仍是占位值，拿到 MOSIP 的注册信息后替换。
     Make = "EyeIris",
     Model = "EyeIris Platform",
-    DeviceProvider = "FTM-Test",
-    DeviceProviderId = "FTM-TEST-001",
+    // 这两项会进设备证书的 Subject(O)：CTK 校验它与签发该证书的 DP 一致，不一致就报
+    // "Organization Name is not matching"（2026-10-09 实测 SBI1001 的 Trust Validation）。
+    // 值须与 device-provider 目录里那份 DP 证书的组织名相符。
+    DeviceProvider = "Shenzhen ICT Global",
+    DeviceProviderId = "ICT_CTK_DEVICE_PROVIDER",
     DeviceSubIds = [0],
-    DeviceSubType = DeviceSubType.Touchless,
+    // 子类型必须落在模态允许的那几个里：虹膜只接受 Single / Double（Touchless 是指纹专属）。
+    // 本设备一次采集可同时拿到左右眼，故取 Double。填错了 CTK 会认不出这个组合，报
+    // "The device type of the selected device is not matching the project"。
+    DeviceSubType = DeviceSubType.Double,
     Certification = CertificationLevel.L0,
     Purpose = Purpose.Registration)]
 public class EyeIrisDevice : IBiometricDevice
@@ -80,6 +86,33 @@ public class EyeIrisDevice : IBiometricDevice
     /// 故原样沿用默认值，不在此作解释。
     /// </remarks>
     private const int SizeFlag = 0x00000303;
+
+    /// <summary>
+    /// 放宽门限那一趟用的质量门限。
+    /// </summary>
+    /// <remarks>
+    /// 0。见 <see cref="DefaultQuality"/> 的备注：本库里 0 是一个有效门限（来者不拒），
+    /// 而不是"不设门限"的哨兵值 —— 故它正是"把能拿到的帧拿回来"这一步要的值。
+    /// </remarks>
+    private const int PermissiveQuality = 0;
+
+    /// <summary>
+    /// 放宽门限那一趟的时间上限（秒）。
+    /// </summary>
+    /// <remarks>
+    /// 门限既已放宽到"来者不拒"，库拿到第一帧就会回，这个上限只是兜底。给个短值是为了让总耗时
+    /// 有个界：客户端给的 timeout 已经在第一趟用满，再叠一个等长的预算会把最坏情况翻倍。
+    /// </remarks>
+    private const int PermissiveAttemptTimeoutSeconds = 3;
+
+    /// <summary>
+    /// 值得跑兜底那一趟的最小客户端预算（毫秒）。
+    /// </summary>
+    /// <remarks>
+    /// 兜底那一趟要花 <see cref="PermissiveAttemptTimeoutSeconds"/> 秒。客户端给的预算比它还短，
+    /// 说明它压根没打算等 —— 那就如实报"采不到"，而不是花掉数倍于预算的时间把它救成成功。
+    /// </remarks>
+    private const int MinimumTimeoutForFallbackMs = PermissiveAttemptTimeoutSeconds * 1000;
 
     /// <summary>
     /// 请求停止后，留给在飞回调收尾的宽限。
@@ -257,14 +290,17 @@ public class EyeIrisDevice : IBiometricDevice
     /// 请求的模态不是虹膜。
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <see cref="CaptureRequest.Position"/> 不是虹膜位置。
+    /// <see cref="CaptureRequest.Positions"/> 含非虹膜位置，或多于一枚。
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="CaptureRequest.Timeout"/> 不为正数，或
     /// <see cref="CaptureRequest.RequestedScore"/> 超出 0~100。
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// 设备未连接，或采集成功但两只眼都没拿到可用图像。
+    /// 设备未连接。
+    /// </exception>
+    /// <exception cref="BiometricNotDetectedException">
+    /// 未能在给定预算内取得有效帧。
     /// </exception>
     public async Task<IReadOnlyList<CaptureResult>> CaptureAsync(
         CaptureRequest request,
@@ -288,16 +324,7 @@ public class EyeIrisDevice : IBiometricDevice
                 "Timeout 必须为正数：库未定义传 0 的行为，可能无限阻塞。");
         }
 
-        // null 与 Unknown 都表示"不指定眼睛"，交给设备自选。
-        var eyes = request.Position switch
-        {
-            null or BiometricPosition.Unknown => EyeIrisPlatformApi.EyeAuto,
-            BiometricPosition.LeftIris => EyeIrisPlatformApi.EyeLeft,
-            BiometricPosition.RightIris => EyeIrisPlatformApi.EyeRight,
-            _ => throw new ArgumentException(
-                $"Position 必须是 LeftIris、RightIris、Unknown 或 null，实际为 {request.Position}。",
-                nameof(request)),
-        };
+        var eyes = ResolveEyes(request);
 
         var quality = (int)(request.RequestedScore ?? DefaultQuality);
         if (quality is < 0 or > 100)
@@ -331,52 +358,239 @@ public class EyeIrisDevice : IBiometricDevice
         // 采集阻塞到质量达标或超时为止，取消时用 biospi_cancel 提前中断。
         using var registration = cancellationToken.Register(() => EyeIrisPlatformApi.biospi_cancel(0));
 
-        var (leftQuality, rightQuality) = await Task.Run(() =>
+        var results = new List<CaptureResult>(2);
+
+        // 最多两趟：第一趟按请求的门限等（达标即回，常规路径的结果与耗时都不变），
+        // 一无所获时第二趟放宽门限把帧拿回来 —— requestedScore 是自动采集的触发门限而非拒绝理由，
+        // 见 TwoAttempts 的备注。
+        //
+        // 兜底那一趟要花掉一次完整的采集，故只在客户端给的预算本身就够长时才跑：CTK 把超时用例
+        // 分成两批，"无输入"那批只给 500ms（要的是采集类错误），"有输入"那批给 10s（要的才是成功）。
+        foreach (var attempt in TwoAttempts(parameters, AllowsFallback(request.Timeout)))
         {
-            var left = 0;
-            var right = 0;
-            var code = EyeIrisPlatformApi.biospi_capture(
-                EyeIrisPlatformApi.CmdTypeSync, parameters, ref left, ref right, leftImage, rightImage);
-            if (code != EyeIrisPlatformApi.NoError)
+            var (code, leftQuality, rightQuality) = await Task.Run(() =>
             {
-                // 失败可能是取消触发的停止，先判定取消再报失败。
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new InvalidOperationException(
-                    $"采集失败，错误码 0x{code:X8}（取值见 EyeIrisPlatformApi 的错误码区）。");
+                var left = 0;
+                var right = 0;
+                var captured = EyeIrisPlatformApi.biospi_capture(
+                    EyeIrisPlatformApi.CmdTypeSync, attempt, ref left, ref right, leftImage, rightImage);
+
+                // 采集超时<b>不是</b>硬失败：超时也要把库可能已回填的帧拿来看（见下方）。
+                // 其余非零码才是真失败（含取消触发的停止 —— 先判定取消再报失败）。
+                if (captured != EyeIrisPlatformApi.NoError
+                    && captured != EyeIrisPlatformApi.ErrorCaptureTimeout)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new InvalidOperationException(
+                        $"采集失败，错误码 0x{captured:X8}（取值见 EyeIrisPlatformApi 的错误码区）。");
+                }
+
+                return (captured, left, right);
+            }, cancellationToken).ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 库不提供设备时间，用主机时间；同一次采集的各条结果共用同一时刻。
+            var capturedAt = DateTimeOffset.UtcNow;
+
+            // 同步模式没有"哪只眼有效"的显式标志 —— 那是异步回调 result 的语义，这里只能自己推。
+            // 判据分两种情形：
+            //  · 质量分 > 0：达标采到，取走。不采用注册回调解读里的 50 分阈值，那会把
+            //    "质量差但仍可用"的帧一并丢掉，与契约相悖。
+            //  · 超时且质量分为 0：质量分为 0 只说明"没达到请求的门限"，<b>不代表没有帧</b>，
+            //    故再看一眼缓冲里有没有真数据（见 HasImageData）。
+            var timedOut = code == EyeIrisPlatformApi.ErrorCaptureTimeout;
+
+            results.Clear();
+
+            if (leftQuality > 0 || (timedOut && HasImageData(leftImage)))
+            {
+                results.Add(CreateResult(BiometricPosition.LeftIris, leftImage, leftQuality, capturedAt));
             }
 
-            return (left, right);
-        }, cancellationToken).ConfigureAwait(false);
+            if (rightQuality > 0 || (timedOut && HasImageData(rightImage)))
+            {
+                results.Add(CreateResult(BiometricPosition.RightIris, rightImage, rightQuality, capturedAt));
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // 库不提供设备时间，用主机时间；同一次采集的各条结果共用同一时刻。
-        var capturedAt = DateTimeOffset.UtcNow;
-
-        // 同步模式没有"哪只眼有效"的显式标志 —— 那是异步回调 result 的语义，
-        // 这里只能按质量分推断：没采到的那只眼，库给的质量分是 0。
-        // 不采用注册回调解读里的 50 分阈值，那会把"质量差但仍可用"的帧一并丢掉，
-        // 与"超时返回本次采集中质量最佳的帧"的契约相悖。
-        var results = new List<CaptureResult>(2);
-        if (leftQuality > 0)
-        {
-            results.Add(CreateResult(BiometricPosition.LeftIris, leftImage, leftQuality, capturedAt));
+            if (results.Count > 0)
+            {
+                return results;
+            }
         }
 
-        if (rightQuality > 0)
-        {
-            results.Add(CreateResult(BiometricPosition.RightIris, rightImage, rightQuality, capturedAt));
-        }
-
-        if (results.Count == 0)
-        {
-            // 库报成功却两只眼质量分都是 0，属自相矛盾，宁可显式失败也不返回空集合
-            // ——空集合会被上层当成"没采到"，从而掩盖了这条异常路径。
-            throw new InvalidOperationException("采集返回成功，但左右眼质量分均为 0，没有可用图像。");
-        }
-
-        return results;
+        // 一趟都没采到：设备本身没问题，是镜头前没有眼睛。宁可显式失败也不返回空集合
+        // —— 空集合会被上层当成"没采到"，从而掩盖了这条路径。
+        throw new BiometricNotDetectedException("没有采到可用图像：未能在给定预算内取得有效帧。");
     }
+
+    /// <summary>
+    /// 把请求的"要采哪只眼"翻成 SDK 的眼睛标志
+    /// </summary>
+    /// <param name="request">
+    /// 采集请求
+    /// </param>
+    /// <returns>
+    /// <see cref="EyeIrisPlatformApi.EyeLeft"/> 等眼睛标志
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <see cref="CaptureRequest.Positions"/> 含非虹膜位置，或多于两枚。
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// <b>点名的部位优先于分组</b>：点名了就按名采（只点了左眼就采左眼），只有没点名时才由
+    /// <see cref="CaptureRequest.Group"/> 决定；两者都没给表示"哪只眼都行"，取
+    /// <see cref="EyeIrisPlatformApi.EyeEither"/>。
+    /// </para>
+    /// <para>
+    /// 双眼请求（<c>{LeftIris, RightIris}</c> 或 <c>Group=Both</c>）取
+    /// <see cref="EyeIrisPlatformApi.EyeBoth"/> —— 这是"必须两眼"与"随便哪只"的分界，
+    /// 厂商示例的注册采集也只用 <c>1/2/3</c> 这三个值。
+    /// </para>
+    /// <para>
+    /// 纯映射，不碰原生：单列出来是为了能脱离真机直接断言。
+    /// </para>
+    /// </remarks>
+    internal static int ResolveEyes(CaptureRequest request)
+    {
+        var positions = request.Positions;
+
+        if (positions.Any(position => position is not (BiometricPosition.LeftIris or BiometricPosition.RightIris)))
+        {
+            throw new ArgumentException(
+                $"Positions 含非虹膜位置，实际为 [{string.Join(", ", positions)}]。",
+                nameof(request));
+        }
+
+        if (positions.Count > 2)
+        {
+            throw new ArgumentException(
+                $"Positions 至多两枚（左右眼），实际为 {positions.Count} 枚。",
+                nameof(request));
+        }
+
+        var left = positions.Contains(BiometricPosition.LeftIris);
+        var right = positions.Contains(BiometricPosition.RightIris);
+
+        if (left && right)
+        {
+            return EyeIrisPlatformApi.EyeBoth;
+        }
+
+        if (left)
+        {
+            return EyeIrisPlatformApi.EyeLeft;
+        }
+
+        if (right)
+        {
+            return EyeIrisPlatformApi.EyeRight;
+        }
+
+        return request.Group switch
+        {
+            CaptureGroup.Left => EyeIrisPlatformApi.EyeLeft,
+            CaptureGroup.Right => EyeIrisPlatformApi.EyeRight,
+            CaptureGroup.Both => EyeIrisPlatformApi.EyeBoth,
+            _ => EyeIrisPlatformApi.EyeEither,
+        };
+    }
+
+    /// <summary>
+    /// 客户端给的预算是否长到值得跑兜底那一趟
+    /// </summary>
+    /// <param name="requestTimeoutMs">
+    /// 请求里的 <c>timeout</c>（毫秒）。
+    /// </param>
+    /// <returns>
+    /// 预算不短于一次兜底采集返回 true。
+    /// </returns>
+    /// <remarks>
+    /// 单列成函数，是因为它正是"有输入超时"与"无输入超时"两批 CTK 用例的分界：前者给 10s，
+    /// 要的是成功的最佳帧；后者只给 500ms，要的是采集类错误。判错方向就会把一边的好用例
+    /// 变成另一边的坏用例，故它值得能被直接断言。
+    /// </remarks>
+    internal static bool AllowsFallback(int requestTimeoutMs)
+        => requestTimeoutMs >= MinimumTimeoutForFallbackMs;
+
+    /// <summary>
+    /// 采集的两趟参数：先按请求的门限，再放宽到"来者不拒"
+    /// </summary>
+    /// <param name="parameters">
+    /// 按请求拼出的第一趟参数。
+    /// </param>
+    /// <param name="allowFallback">
+    /// 是否允许跑兜底那一趟；见 <see cref="MinimumTimeoutForFallbackMs"/>。
+    /// </param>
+    /// <returns>
+    /// 依次给出各趟参数。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>规则：<c>requestedScore</c> 是自动采集的触发门限，不是拒绝的理由。</b>规范原文：
+    /// "Upon reaching the quality score the biometric device is expected to auto-capture the image.
+    /// <i>If the requested score is not met, until the timeout, the best frame during the capture
+    /// sequence must be captured/returned.</i>" —— 达不到门限也要把最佳帧<b>当成功</b>交回去。
+    /// </para>
+    /// <para>
+    /// <b>为什么需要两趟才能做到这件事</b>：本库只在这到门限时才回填帧，达不到就空等满 timeout、
+    /// 一帧不回（它不提供"窗口内看过哪些帧"）。所以第一趟用请求的门限去等（这一步也顺带把 timeout
+    /// 等满），一无所获时第二趟把门限放宽到"来者不拒"，把帧拿回来 —— 客户端此刻仍在位。
+    /// </para>
+    /// <para>
+    /// <b>把门限当硬判据是错的</b>：那样达不到门限就报 101"检测不到生物特征"，而事实是
+    /// "生物特征在位、只是没达到请求的质量"。CTK 有三个用例栽在这上面：SBI1050（门限 100，
+    /// 顺带还要求响应耗时 <c>&gt;=</c> timeout）、SBI1073 与 SBI1077（门限 60）。
+    /// </para>
+    /// <para>
+    /// <b>反过来，兜底也不能无条件跑</b>：它要花掉一次完整的采集。CTK 另有一批超时用例要的恰恰是
+    /// 采集类错误（SBI1040~1043，名字里写着"without any input"，只给 500ms）—— 客户端给这么短的
+    /// 预算就是没打算等，花数倍于它的时间去把一次成功救回来是错的。故由
+    /// <paramref name="allowFallback"/> 把住：预算短于一次兜底采集时不跑，如实报采不到。
+    /// </para>
+    /// <para>
+    /// 第一趟按请求的门限，故达标即回 —— 常规路径（门限 40 的那些用例）的耗时与结果都和从前一致。
+    /// </para>
+    /// </remarks>
+    internal static IEnumerable<EyeIrisPlatformApi.BioSpiParams> TwoAttempts(
+        EyeIrisPlatformApi.BioSpiParams parameters,
+        bool allowFallback)
+    {
+        yield return parameters;
+
+        if (!allowFallback)
+        {
+            yield break;
+        }
+
+        var relaxed = parameters;
+        relaxed.Quality = PermissiveQuality;
+        relaxed.TimeOut = PermissiveAttemptTimeoutSeconds;
+
+        yield return relaxed;
+    }
+
+    /// <summary>
+    /// 库回填的图像缓冲里是否有真实数据
+    /// </summary>
+    /// <param name="image">
+    /// 库回填的图像缓冲。
+    /// </param>
+    /// <returns>
+    /// 存在任何一个非零像素返回 true。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// 超时时库可能已经回填了最佳帧、却把质量分记 0（质量分报的是"是否达到请求的门限"，
+    /// 不是"有没有帧"）。要判"有没有帧"只能另找凭据，而<b>整块缓冲全零</b>是一个真实采集
+    /// 不可能出现的情形 —— 任何画面都有底噪，故拿它当"没回填"的判据。
+    /// </para>
+    /// <para>
+    /// 纯函数，单列出来是为了能脱离真机直接断言。
+    /// </para>
+    /// </remarks>
+    internal static bool HasImageData(ReadOnlySpan<byte> image)
+        => image.IndexOfAnyExcept((byte)0) >= 0;
 
     /// <inheritdoc/>
     /// <exception cref="ArgumentNullException">

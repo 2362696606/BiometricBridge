@@ -11,6 +11,11 @@
     </ItemGroup>
 
     <ItemGroup>
+      <!--  纯映射函数（如 EyeIrisDevice.ResolveEyes）是 internal：无需真机即可直接断言。  -->
+      <InternalsVisibleTo Include="BiometricBridge.Device.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
       <Folder Include="lib\Bio\" />
     </ItemGroup>
 

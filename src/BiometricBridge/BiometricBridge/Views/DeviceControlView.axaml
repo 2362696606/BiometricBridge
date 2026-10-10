@@ -31,6 +31,12 @@
             <Button Command="{Binding DisconnectCommand}" Content="断开" />
         </StackPanel>
 
+        <!--  更换设备证书：重新生成设备密钥并请 DP 重签一张证书（SBI 的密钥轮换，CTK 的 SBI1022 用它）。  -->
+        <Button
+            Command="{Binding RotateCertificateCommand}"
+            Content="更换证书"
+            ToolTip.Tip="为选中设备重新签发一张设备证书" />
+
         <StackPanel Orientation="Horizontal" Spacing="8">
             <TextBlock Text="状态" VerticalAlignment="Center" />
             <ComboBox

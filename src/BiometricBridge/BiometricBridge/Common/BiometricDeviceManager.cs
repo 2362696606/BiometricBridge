@@ -33,7 +33,7 @@ namespace BiometricBridge.Common;
 /// 而不是现在这个按设备实例的门）。
 /// </para>
 /// </remarks>
-public sealed class BiometricDeviceManager : IAsyncDisposable
+public sealed class BiometricDeviceManager : IAsyncDisposable, IDeviceInventory, IDeviceCapture, IDevicePreview
 {
     #region Fileds
 
@@ -210,8 +210,21 @@ public sealed class BiometricDeviceManager : IAsyncDisposable
     /// <exception cref="KeyNotFoundException">
     /// 设备 id 不存在。
     /// </exception>
+    /// <exception cref="DeviceBusyException">
+    /// 该设备已有采集在进行。
+    /// </exception>
     /// <remarks>
-    /// 不触发 <see cref="DeviceStateChanged"/>：采集不改变连接状态。
+    /// <para>
+    /// <b>并行调用以 Busy 拒绝，不排队</b>：规范要求同一台设备一次只受理一个采集
+    /// （"respond with success to only one call at a time"）。故这里对并发采集直接
+    /// <see cref="DeviceBusyException"/>，而不是让它等在前一次后面 —— 排队会把请求吊到超时，
+    /// 与规范预期的"当场报忙"相反。
+    /// </para>
+    /// <para>
+    /// <b>采集期间对外状态为 <c>Busy</c></b>：置位与还原都会触发 <see cref="DeviceStateChanged"/>，
+    /// 于是 <c>/info</c>、<c>/device</c> 在采集期间报出规范要求的"忙"。还原的是采集前的那个状态，
+    /// 不会把别处（如手动设置）的状态冲掉。
+    /// </para>
     /// </remarks>
     public async Task<IReadOnlyList<CaptureResult>> CaptureAsync(
         Guid deviceId,
@@ -223,7 +236,24 @@ public sealed class BiometricDeviceManager : IAsyncDisposable
         // 采集与预览互斥：原生侧同时只跑得了一个采集。先停预览，否则这次采集会以"状态非法"失败。
         await StopPreviewAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
-        return await managedDevice.Device.CaptureAsync(request, cancellationToken).ConfigureAwait(false);
+        // 抢采集权：抢不到说明已有采集在跑，当场报忙。
+        if (!managedDevice.TryBeginCapture())
+        {
+            throw new DeviceBusyException($"设备 {deviceId} 正在采集中。");
+        }
+
+        var previousStatus = managedDevice.DeviceStatus;
+        try
+        {
+            SetDeviceStatus(deviceId, BiometricDeviceStatus.Busy);
+
+            return await managedDevice.Device.CaptureAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            managedDevice.EndCapture();
+            SetDeviceStatus(deviceId, previousStatus);
+        }
     }
 
     /// <summary>

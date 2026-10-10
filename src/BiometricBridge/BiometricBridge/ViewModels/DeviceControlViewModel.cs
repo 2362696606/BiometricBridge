@@ -4,13 +4,15 @@ using System.Threading.Tasks;
 using Avalonia.Threading;
 using BiometricBridge.Common;
 using BiometricBridge.Core.Models.Enums;
+using BiometricBridge.Host;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Serilog;
 
 namespace BiometricBridge.ViewModels;
 
 /// <summary>
-/// 设备控制视图模型：对列表中选中的设备执行连接/断开，并手动设置其状态。
+/// 设备控制视图模型：对列表中选中的设备执行连接/断开、更换证书，并手动设置其状态。
 /// </summary>
 /// <remarks>
 /// 与列表共享同一台设备：选中项来自 <see cref="DeviceSelectionService"/>，与
@@ -25,6 +27,8 @@ public partial class DeviceControlViewModel : ObservableObject
 
     private readonly DeviceSelectionService _selection;
 
+    private readonly DeviceCertificateService _certificates;
+
     #endregion
 
     /// <summary>
@@ -36,13 +40,20 @@ public partial class DeviceControlViewModel : ObservableObject
     /// <param name="selection">
     /// 共享的设备选中服务。
     /// </param>
+    /// <param name="certificates">
+    /// 设备证书服务，换证书经它。
+    /// </param>
     /// <remarks>
     /// 订阅而不退订：本 VM 与管理器、选中服务同为进程级寿命，一起随进程结束，不构成泄漏。
     /// </remarks>
-    public DeviceControlViewModel(BiometricDeviceManager deviceManager, DeviceSelectionService selection)
+    public DeviceControlViewModel(
+        BiometricDeviceManager deviceManager,
+        DeviceSelectionService selection,
+        DeviceCertificateService certificates)
     {
         _deviceManager = deviceManager;
         _selection = selection;
+        _certificates = certificates;
 
         _deviceManager.DeviceStateChanged += OnDeviceStateChanged;
         _selection.PropertyChanged += OnSelectionChanged;
@@ -153,6 +164,43 @@ public partial class DeviceControlViewModel : ObservableObject
     private bool CanDisconnect()
     {
         return SelectedDeviceItem is not null && IsConnected;
+    }
+
+    /// <summary>
+    /// 更换选中设备的证书。
+    /// </summary>
+    /// <remarks>
+    /// 同步命令：签发只用内存里的设备密钥与 DP 材料，不碰设备硬件，耗时可以忽略。
+    /// </remarks>
+    [RelayCommand(CanExecute = nameof(CanRotateCertificate))]
+    private void RotateCertificate()
+    {
+        if (SelectedDeviceItem is not { } item)
+        {
+            return;
+        }
+
+        try
+        {
+            _certificates.Rotate(item.DeviceId);
+            Log.Information("已为设备 {SerialNo} 更换证书。", item.SerialNo);
+        }
+        catch (Exception exception)
+        {
+            // 换证书失败没有别的界面出口，故就地记一条：日志视图是操作员唯一能看到结果的地方。
+            Log.Error(exception, "更换设备证书失败。");
+        }
+    }
+
+    /// <summary>
+    /// 换证书命令可否执行：设备得连着 —— 设备证书的 Subject 里要写序列号，而序列号只有连上才报得出来。
+    /// </summary>
+    /// <returns>
+    /// 可执行返回 true。
+    /// </returns>
+    private bool CanRotateCertificate()
+    {
+        return SelectedDeviceItem is { IsConnected: true, SerialNo.Length: > 0 };
     }
 
     #endregion
@@ -268,5 +316,6 @@ public partial class DeviceControlViewModel : ObservableObject
     {
         ConnectCommand.NotifyCanExecuteChanged();
         DisconnectCommand.NotifyCanExecuteChanged();
+        RotateCertificateCommand.NotifyCanExecuteChanged();
     }
 }

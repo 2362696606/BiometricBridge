@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <!--  xunit.v3 的测试工程必须是可执行工程（自带入口），否则包的 targets 直接报错。  -->
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--  xunit.v3 走 Microsoft.Testing.Platform；.NET 10 的 dotnet test 需显式开启新体验，否则直接报错。  -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JetBrains.Annotations" />
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--  本项目的被测对象都在 Host.Http：平台原生实现（图像编码等）落在这里。  -->
+    <ProjectReference Include="..\BiometricBridge.Host.Http\BiometricBridge.Host.Http.csproj" />
+  </ItemGroup>
+
+</Project>

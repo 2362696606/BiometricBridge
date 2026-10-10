@@ -20,6 +20,14 @@ namespace BiometricBridge.Host.Http;
 public sealed class HttpHostSettings
 {
     /// <summary>
+    /// 监听地址前缀，仅回环：本机调用方可达，外部机器不可达。
+    /// </summary>
+    /// <remarks>
+    /// 写 <c>127.0.0.1</c> 而非 <c>localhost</c>，避开双栈解析差异。
+    /// </remarks>
+    private const string ListenAddress = "http://127.0.0.1";
+
+    /// <summary>
     /// 允许的端口下限。
     /// </summary>
     public const int MinPort = 4501;
@@ -38,4 +46,13 @@ public sealed class HttpHostSettings
     /// 监听端口。宿主启动时读取；界面只写入 <see cref="MinPort"/>–<see cref="MaxPort"/> 之间的值。
     /// </summary>
     public int Port { get; set; } = DefaultPort;
+
+    /// <summary>
+    /// 监听根地址，形如 <c>http://127.0.0.1:4501</c>（不含结尾斜杠）。
+    /// </summary>
+    /// <remarks>
+    /// 宿主拿它建监听，控制器拿它拼响应里的回呼地址 —— 一处定义、两边一致：改绑定地址时回呼地址自动跟着改，
+    /// 不会一边听着这个地址、一边把客户端指向别处。
+    /// </remarks>
+    public string BaseUrl => $"{ListenAddress}:{Port}";
 }

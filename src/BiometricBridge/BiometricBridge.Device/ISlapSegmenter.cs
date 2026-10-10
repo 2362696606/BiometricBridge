@@ -20,9 +20,13 @@ public interface ISlapSegmenter
     /// <param name="height">
     /// 图像高度。
     /// </param>
+    /// <param name="expectedFingerCount">
+    /// 期望分割出的手指数，由请求的分组与枚数定（左手四指／右手四指为 4，双拇指为 2）。
+    /// 传 0 视为不指定。
+    /// </param>
     /// <returns>
-    /// 分割出的单指结果，条数不定。返回空集合表示分割失败，
-    /// 调用方应回退到使用整幅原图。
+    /// 判定出的手别与分割出的单指结果，条数不定。<see cref="SegmentResult.Fingers"/> 为空表示
+    /// 分割失败，调用方应回退到使用整幅原图。
     /// </returns>
-    IReadOnlyList<SegmentedFinger> Segment(byte[] image, int width, int height);
+    SegmentResult Segment(byte[] image, int width, int height, int expectedFingerCount);
 }

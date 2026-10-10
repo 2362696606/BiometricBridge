@@ -1,11 +1,9 @@
-using System;
-using BiometricBridge.Core.Models;
 using BiometricBridge.Core.Models.Enums;
 
-namespace BiometricBridge.Common;
+namespace BiometricBridge.Core.Models;
 
 /// <summary>
-/// 设备只读快照：管理器对外代表一台设备的全部信息。
+/// 设备只读快照：对外代表一台设备的全部信息。
 /// </summary>
 /// <param name="DeviceId">
 /// 设备 id，即设备字典的键。<see cref="DeviceInfo"/> 自身不携带 id，故在此单列。

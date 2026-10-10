@@ -11,9 +11,13 @@ namespace BiometricBridge.Device;
 public class IctSlapSegmenter : ISlapSegmenter
 {
     /// <summary>
-    /// 期望分割的手指数。
+    /// 多指联采的手指数上限。
     /// </summary>
-    private const int FingerCount = 4;
+    /// <remarks>
+    /// 规范里的联采最多四枚（左手四指／右手四指）；它同时决定缓冲区大小，故不能由请求里的数字
+    /// 说了算（见 <see cref="Segment"/>）。未指定期望枚数时也按它算 —— 本传感器就按这个枚数采。
+    /// </remarks>
+    private const int MaxFingerCount = 4;
 
     /// <summary>
     /// 单指图像宽度（像素）。
@@ -58,25 +62,30 @@ public class IctSlapSegmenter : ISlapSegmenter
     private const float QualityLowBlockRatio = 0.1f;
 
     /// <inheritdoc/>
-    public IReadOnlyList<SegmentedFinger> Segment(byte[] image, int width, int height)
+    public SegmentResult Segment(byte[] image, int width, int height, int expectedFingerCount)
     {
-        var fingerInfo = new int[FingerCount * 4];
+        // 期望枚数来自请求（分组/枚数），而它决定要分配多大的缓冲区，故先在本地夹住：
+        // 未指定或越界的取值不能直接拿去算长度。
+        var fingerCount = Math.Clamp(
+            expectedFingerCount <= 0 ? MaxFingerCount : expectedFingerCount, 1, MaxFingerCount);
+
+        var fingerInfo = new int[fingerCount * 4];
         var hand = 0;
         var segmentCount = 0;
 
-        var buffer = new byte[FingerCount * SegmentBufferSide * SegmentBufferSide];
+        var buffer = new byte[fingerCount * SegmentBufferSide * SegmentBufferSide];
 
-        var rc = IctFlatSegApi.ICTFlatFingerSegmentDLL(image, width, height, FingerCount,
+        var rc = IctFlatSegApi.ICTFlatFingerSegmentDLL(image, width, height, fingerCount,
             ref hand, ref segmentCount, fingerInfo, buffer);
         if (rc != 0 || segmentCount <= 0)
         {
-            return Array.Empty<SegmentedFinger>();
+            return SegmentResult.Empty;
         }
 
         // 库返回的个数理论上不会超出请求值，越界读取在这里兜住。
-        if (segmentCount > FingerCount)
+        if (segmentCount > fingerCount)
         {
-            segmentCount = FingerCount;
+            segmentCount = fingerCount;
         }
 
         var segmentBytes = SegmentWidth * SegmentHeight;
@@ -92,9 +101,29 @@ public class IctSlapSegmenter : ISlapSegmenter
                 QualityBlockSize, QualityStride, QualityLowBlockThresh, QualityLowBlockRatio,
                 ref quality);
 
-            fingers.Add(new SegmentedFinger(segment, SegmentWidth, SegmentHeight, quality));
+            fingers.Add(new SegmentedFinger(segment, SegmentWidth, SegmentHeight, quality, i));
         }
 
-        return fingers;
+        return new SegmentResult(ResolveHand(hand), fingers);
     }
+
+    /// <summary>
+    /// 原生手别出参 → <see cref="FingerHand"/>
+    /// </summary>
+    /// <param name="hand">
+    /// 原生出参
+    /// </param>
+    /// <returns>
+    /// 手别；非 1/2 一律按判不出算
+    /// </returns>
+    /// <remarks>
+    /// 头文件的取值是 <c>1</c> 左手、<c>2</c> 右手、<c>0</c> 判定失败，其余取值未定义，
+    /// 故按"判不出"兜住而不是硬转。
+    /// </remarks>
+    private static FingerHand ResolveHand(int hand) => hand switch
+    {
+        1 => FingerHand.Left,
+        2 => FingerHand.Right,
+        _ => FingerHand.Unknown,
+    };
 }

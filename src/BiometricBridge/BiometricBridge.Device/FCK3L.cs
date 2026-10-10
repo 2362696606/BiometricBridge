@@ -29,8 +29,11 @@ namespace BiometricBridge.Device;
 [FingerprintDeviceInfo(
     Make = "ICT Global",
     Model = "FCK3L",
-    DeviceProvider = "FTM-Test",
-    DeviceProviderId = "FTM-TEST-001",
+    // 这两项会进设备证书的 Subject(O)：CTK 校验它与签发该证书的 DP 一致，不一致就报
+    // "Organization Name is not matching"（2026-10-09 实测 SBI1001 的 Trust Validation）。
+    // 值须与 device-provider 目录里那份 DP 证书的组织名相符。
+    DeviceProvider = "Shenzhen ICT Global",
+    DeviceProviderId = "ICT_CTK_DEVICE_PROVIDER",
     DeviceSubIds = [1, 2, 3],
     DeviceSubType = DeviceSubType.Slap,
     Certification = CertificationLevel.L0,
@@ -52,6 +55,16 @@ public class FCK3L : IBiometricDevice
     /// 判定为多指图像的最小宽度（像素）。取自参考实现。
     /// </summary>
     private const int SlapWidthMin = 800;
+
+    /// <summary>
+    /// 单手四指联采的枚数。
+    /// </summary>
+    private const int FourFingers = 4;
+
+    /// <summary>
+    /// 双拇指联采的枚数。
+    /// </summary>
+    private const int TwoThumbs = 2;
 
     /// <summary>
     /// 取原始图时传给 SDK 的压缩比。
@@ -191,6 +204,9 @@ public class FCK3L : IBiometricDevice
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="CaptureRequest.Timeout"/> 不为正数。
     /// </exception>
+    /// <exception cref="BiometricNotDetectedException">
+    /// 取不到图：多为压板上没有手指，也可能是取图本身失败 —— 两者从返回值上分不开，都归这里。
+    /// </exception>
     public async Task<IReadOnlyList<CaptureResult>> CaptureAsync(
         CaptureRequest request,
         CancellationToken cancellationToken = default)
@@ -226,7 +242,10 @@ public class FCK3L : IBiometricDevice
         if (image is null)
         {
             // 取不到图：起采被拒，或取图本身失败。失败原因见 ictScanGetLastErrNo。
-            throw new InvalidOperationException($"采集失败，错误码 {IctScanApi.ictScanGetLastErrNo()}。");
+            // 多数情况是压板上没手指（见 RunPreviewAsync 里同一路径的说明），故报"没检测到"而非
+            // "设备未就绪"—— 设备好着，只是这次没采到。
+            throw new BiometricNotDetectedException(
+                $"没有采到可用图像（起采被拒或取图失败，错误码 {IctScanApi.ictScanGetLastErrNo()}）。");
         }
 
         // 库不提供设备时间，用主机时间；同一次采集的各条结果共用同一时刻。
@@ -235,15 +254,18 @@ public class FCK3L : IBiometricDevice
         // 宽度达到阈值说明是多指图像，交给分割器拆成按指结果。
         if (_deviceInfo.Width >= SlapWidthMin)
         {
-            var fingers = _segmenter.Segment(image, _deviceInfo.Width, _deviceInfo.Height);
-            if (fingers.Count > 0)
+            var segmented = _segmenter.Segment(
+                image, _deviceInfo.Width, _deviceInfo.Height, ExpectedFingerCount(request));
+
+            if (segmented.Fingers.Count > 0)
             {
-                return fingers.Select(finger => new CaptureResult
+                return segmented.Fingers.Select(finger => new CaptureResult
                 {
                     Modality = BiometricModality.Finger,
 
-                    // 库输出的手指类型字段编码不明，不做映射，宁可置为 Unknown。
-                    Position = BiometricPosition.Unknown,
+                    // 库输出的手指类型字段编码不明，靠"手别 + 分割序号"推部位（见 FingerLabel）；
+                    // 推不出时才落 Unknown —— 那会编码成 ISO 的"未知部位"。
+                    Position = FingerLabel.Of(finger.Index, segmented.Hand, request.Group),
                     Data = finger.Image,
                     Format = CaptureDataFormat.RawImage,
 
@@ -263,8 +285,9 @@ public class FCK3L : IBiometricDevice
             {
                 Modality = BiometricModality.Finger,
 
-                // 库不报告实际采集到哪根手指，只能回显请求值。
-                Position = request.Position ?? BiometricPosition.Unknown,
+                // 单指传感器不分割，库里也没有"采到哪根"的信息，只能回显请求值；
+                // 没点名（空集合）或点了多枚时无从回显。
+                Position = request.Positions.Count == 1 ? request.Positions[0] : BiometricPosition.Unknown,
                 Data = image,
                 Format = CaptureDataFormat.RawImage,
                 Image = new CaptureImageInfo(_deviceInfo.Width, _deviceInfo.Height, 8, SensorDpi, SensorDpi),
@@ -273,6 +296,35 @@ public class FCK3L : IBiometricDevice
             },
         };
     }
+
+    /// <summary>
+    /// 本次采集期望分割出的手指数
+    /// </summary>
+    /// <param name="request">
+    /// 采集请求
+    /// </param>
+    /// <returns>
+    /// 期望枚数
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// 分组定了就按分组：左手／右手联采是四枚，双拇指是两枚。未指定分组时用请求的枚数，
+    /// 枚数也没给则按本传感器的常规联采枚数（四指）算。
+    /// </para>
+    /// <para>
+    /// 这只是给分割器的<b>期望值</b>，不决定取哪张图 —— 取到的是不是多指图，由传感器宽度决定
+    /// （见 <see cref="SlapWidthMin"/>）。
+    /// </para>
+    /// <para>
+    /// 纯计算，不碰原生：单列出来是为了能脱离真机直接断言。
+    /// </para>
+    /// </remarks>
+    internal static int ExpectedFingerCount(CaptureRequest request) => request.Group switch
+    {
+        CaptureGroup.Left or CaptureGroup.Right => FourFingers,
+        CaptureGroup.Both => TwoThumbs,
+        _ => request.Count > 0 ? request.Count : FourFingers,
+    };
 
     /// <inheritdoc/>
     /// <remarks>

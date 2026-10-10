@@ -34,19 +34,6 @@ namespace BiometricBridge.Host.Http;
 /// </remarks>
 public sealed class HttpServiceHost : IExternalServiceHost
 {
-    #region 常量
-
-    /// <summary>
-    /// 监听地址，仅回环：本机调用方可达，外部机器不可达
-    /// </summary>
-    /// <remarks>
-    /// 写 <c>127.0.0.1</c> 而非 <c>localhost</c>，避开双栈解析差异。端口不写死，启动时由
-    /// <see cref="HttpHostSettings.Port"/> 拼入。
-    /// </remarks>
-    private const string ListenAddress = "http://127.0.0.1";
-
-    #endregion
-
     #region Fileds
 
     /// <summary>
@@ -188,7 +175,7 @@ public sealed class HttpServiceHost : IExternalServiceHost
         // （与容器那个坑同一形状）。默认值恰好也是 false，但别把这件事交给默认值。
         builder.Logging.AddSerilog(Log.Logger, dispose: false);
 
-        builder.WebHost.UseUrls($"{ListenAddress}:{_settings.Port}");
+        builder.WebHost.UseUrls(_settings.BaseUrl);
 
         // 换掉宿主自带的 MS.DI 容器，让它用应用容器解析 —— 控制器要的功能实例与应用侧是同一批单例。
         builder.Host.UseServiceProviderFactory(new AppContainerServiceProviderFactory(_container));
@@ -198,6 +185,9 @@ public sealed class HttpServiceHost : IExternalServiceHost
         builder.Services.AddControllers().AddApplicationPart(typeof(HealthController).Assembly);
 
         var app = builder.Build();
+
+        // 跨域在控制器之前统一处理：SBI 的调用方是浏览器，预检与正式响应都要 CORS 头，见该中间件说明。
+        app.UseMiddleware<SbiCorsMiddleware>();
         app.MapControllers();
         return app;
     }

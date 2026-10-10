@@ -7,7 +7,23 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!--  SBI 的 JWS 签名（RS256，header 带 x5c 证书链）。  -->
+        <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\BiometricBridge.Core\BiometricBridge.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!--  映射表（SbiBioSubTypes）与 ISO 位置码都是 internal：让测试能直接对表做一致性断言。  -->
+        <InternalsVisibleTo Include="BiometricBridge.Host.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!--  DP（设备供应商）材料：签发设备证书用。必须随构建落到输出目录 —— 运行期按 AppContext.BaseDirectory
+              去找，不复制就只在本机开发目录下碰巧能找到。  -->
+        <None Include="device-provider\**" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
 </Project>

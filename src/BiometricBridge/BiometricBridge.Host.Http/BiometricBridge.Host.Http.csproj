@@ -17,6 +17,11 @@
         <PackageReference Include="DryIoc.Microsoft.DependencyInjection" />
         <!--  宿主的 ILogger 要汇进应用那份 Serilog，故这里认得 Serilog。  -->
         <PackageReference Include="Serilog.Extensions.Logging" />
+        <!--  推流把原始灰度帧编成 JPEG（M-JPEG）。原生库由桌面头的 Avalonia 一并部署。  -->
+        <PackageReference Include="SkiaSharp" />
+        <!--  虹膜 ISO 19794-6 记录要无损 JPEG2000。与 SkiaSharp 同理：随包分发原生库，
+              故只放在这一层，Host 与 Core 只认 IJpeg2000Encoder 抽象。  -->
+        <PackageReference Include="Magick.NET-Q8-AnyCPU" />
     </ItemGroup>
 
     <ItemGroup>

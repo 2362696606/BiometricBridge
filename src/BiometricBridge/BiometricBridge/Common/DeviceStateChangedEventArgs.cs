@@ -1,4 +1,5 @@
 using System;
+using BiometricBridge.Core.Models;
 
 namespace BiometricBridge.Common;
 

@@ -1,0 +1,12 @@
+# SBI 对外服务的 MOSIP 侧设置。
+#
+# device-provider 目录里是设备供应商（DP）的材料：DP 证书与其私钥用来给设备公钥签发设备证书，
+# 于是 /info 的 deviceInfo 能带上可验签的 x5c 证书链。材料随构建复制到输出目录。
+mosip:
+  deviceProviderPath: "device-provider"
+  deviceProviderCertFile: "ict_device_provider.cert.der"
+  deviceProviderKeyFile: "ict_device_provider.key.pem"
+  # CTK 测试材料自带的私钥口令；正式部署换掉。
+  deviceProviderKeyPassword: "123"
+  # 报文里的 env，取 DeviceEnvironment 的成员名（Staging / Developer / PreProduction / Production）。
+  env: "Staging"

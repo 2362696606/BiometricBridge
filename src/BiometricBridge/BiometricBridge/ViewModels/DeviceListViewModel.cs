@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using Avalonia.Threading;
 using BiometricBridge.Common;
+using BiometricBridge.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace BiometricBridge.ViewModels;
