@@ -1,5 +1,4 @@
 using BiometricBridge.Core;
-using BiometricBridge.Host.Http.Controllers;
 using DryIoc;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -180,15 +179,13 @@ public sealed class HttpServiceHost : IExternalServiceHost
         // 换掉宿主自带的 MS.DI 容器，让它用应用容器解析 —— 控制器要的功能实例与应用侧是同一批单例。
         builder.Host.UseServiceProviderFactory(new AppContainerServiceProviderFactory(_container));
 
-        // 必须显式加应用部件：入口程序集是 BiometricBridge.Desktop，MVC 默认只扫入口程序集，
-        // 不加的话 Host.Http 里的控制器永远发现不了 —— 表现为请求一律 404，且启动期毫无提示。
-        builder.Services.AddControllers().AddApplicationPart(typeof(HealthController).Assembly);
+        // 对外接口的装配（控制器、请求体绑定规则、中间件顺序）统一在 SbiHttpSetup ——
+        // 集成测试装的是同一份，免得"宿主漏装某条规则"时测试仍全绿。
+        builder.Services.AddSbiControllers();
 
         var app = builder.Build();
 
-        // 跨域在控制器之前统一处理：SBI 的调用方是浏览器，预检与正式响应都要 CORS 头，见该中间件说明。
-        app.UseMiddleware<SbiCorsMiddleware>();
-        app.MapControllers();
+        app.UseSbiPipeline();
         return app;
     }
 }

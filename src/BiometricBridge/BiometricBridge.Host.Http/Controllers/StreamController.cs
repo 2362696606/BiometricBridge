@@ -74,9 +74,11 @@ public sealed class StreamController(
     /// 成功时为空的动作结果（帧已直接写入响应体）；失败时为 JSON 错误报文
     /// </returns>
     /// <remarks>
-    /// <b>不用 <c>[FromBody]</c> 绑定</b>：推流请求体是可缺省的，而 CTK 实测发 <c>/stream</c> 时不带
-    /// <c>application/json</c>（乃至无体），走 <c>[FromBody]</c> 会被框架判 <b>415</b>。故手工宽容解析
-    /// —— 空体、非 JSON、缺 Content-Type 一律当缺省参数，见 <see cref="ReadRequestAsync"/>。
+    /// <b>不用 <c>[FromBody]</c> 绑定</b>：CTK 实测发 <c>/stream</c> 时不带 <c>application/json</c>
+    /// （乃至无体），当年走 <c>[FromBody]</c> 会被框架判 <b>415</b>，故改手工宽容解析。
+    /// 媒体类型那道闸现已由 <see cref="SbiJsonInputFormatter"/> 从全局拆掉，但这里仍手工解析：
+    /// 本端点的请求体是可选参数，空体、非 JSON、缺 Content-Type 都该当"没给参数"收下，
+    /// 而不是交给框架回 400。见 <see cref="ReadRequestAsync"/>。
     /// </remarks>
     [HttpPost]
     [AcceptVerbs("STREAM")]
