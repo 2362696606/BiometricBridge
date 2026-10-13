@@ -191,6 +191,9 @@ public class App : PrismApplication
 
         // 设备密钥按需生成（设备证书的 CN 是序列号，只有连上后才知道），故按身份缓存，见 DeviceSignerProvider。
         container.Register<DeviceSignerProvider>(Reuse.Singleton);
+
+        // 设备身份：发现、设备信息、采集三个端点必须报（认）同一个 id，故由同一份持有 —— 见 DeviceIdentityService。
+        containerRegistry.RegisterSingleton<DeviceIdentityService>();
         containerRegistry.RegisterSingleton<DeviceInfoService>();
 
         // 虹膜图像的 JPEG2000 编码器：实现带平台原生库，故抽象在 Host、实现在 Host.Http，

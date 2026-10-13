@@ -18,6 +18,15 @@ public sealed class PreviewStreamService
     /// </summary>
     private readonly IDeviceInventory _inventory;
 
+    /// <summary>
+    /// 设备身份
+    /// </summary>
+    /// <remarks>
+    /// 请求里的 <c>deviceId</c> 是客户端从设备信息端点抄回来的，那就是本服务持有的身份
+    /// （序列号，见 <see cref="DeviceIdentityService"/>），故按它选设备。
+    /// </remarks>
+    private readonly DeviceIdentityService _identity;
+
     #endregion
 
     /// <summary>
@@ -26,14 +35,19 @@ public sealed class PreviewStreamService
     /// <param name="inventory">
     /// 设备清单
     /// </param>
+    /// <param name="identity">
+    /// 设备身份
+    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="inventory"/> 为 null
+    /// 任一参数为 null
     /// </exception>
-    public PreviewStreamService(IDeviceInventory inventory)
+    public PreviewStreamService(IDeviceInventory inventory, DeviceIdentityService identity)
     {
         ArgumentNullException.ThrowIfNull(inventory);
+        ArgumentNullException.ThrowIfNull(identity);
 
         _inventory = inventory;
+        _identity = identity;
     }
 
     /// <summary>
@@ -59,7 +73,7 @@ public sealed class PreviewStreamService
         if (!string.IsNullOrEmpty(deviceId))
         {
             return usable.FirstOrDefault(snapshot =>
-                string.Equals(snapshot.DeviceId.ToString(), deviceId, StringComparison.OrdinalIgnoreCase));
+                string.Equals(_identity.Resolve(snapshot.DeviceId, snapshot.Info!), deviceId, StringComparison.OrdinalIgnoreCase));
         }
 
         if (deviceSubId is { } subId)

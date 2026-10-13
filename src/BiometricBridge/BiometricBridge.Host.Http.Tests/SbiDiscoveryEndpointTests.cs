@@ -280,6 +280,7 @@ public sealed class SbiDiscoveryEndpointTests
             // 空清单足够：本测试守的是"请求进得去、回得来"，设备字段的形状不在这里验。
             builder.Services.AddSingleton<IDeviceInventory, EmptyInventory>();
             builder.Services.AddSingleton(settings);
+            builder.Services.AddSingleton<DeviceIdentityService>();
             builder.Services.AddSingleton<DeviceDiscoveryService>();
             builder.Services.AddSingleton<ILogger<SbiTrafficLogMiddleware>>(log);
             builder.Services.AddSbiControllers();

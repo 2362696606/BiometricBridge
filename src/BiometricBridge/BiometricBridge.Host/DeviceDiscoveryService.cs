@@ -36,6 +36,11 @@ public sealed class DeviceDiscoveryService
     /// </summary>
     private readonly IDeviceInventory _inventory;
 
+    /// <summary>
+    /// 设备身份（与设备信息端点共用同一份）
+    /// </summary>
+    private readonly DeviceIdentityService _identity;
+
     #endregion
 
     /// <summary>
@@ -44,14 +49,19 @@ public sealed class DeviceDiscoveryService
     /// <param name="inventory">
     /// 设备清单
     /// </param>
+    /// <param name="identity">
+    /// 设备身份
+    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="inventory"/> 为 null
+    /// 任一参数为 null
     /// </exception>
-    public DeviceDiscoveryService(IDeviceInventory inventory)
+    public DeviceDiscoveryService(IDeviceInventory inventory, DeviceIdentityService identity)
     {
         ArgumentNullException.ThrowIfNull(inventory);
+        ArgumentNullException.ThrowIfNull(identity);
 
         _inventory = inventory;
+        _identity = identity;
     }
 
     /// <summary>
@@ -96,7 +106,15 @@ public sealed class DeviceDiscoveryService
                 continue;
             }
 
-            responses.Add(CreateResponse(snapshot, deviceInfo, callbackBaseUrl));
+            // 身份取序列号，与设备信息端点同源。这台从没报过序列号：拼不出合法的
+            // deviceId/deviceCode/serialNo，只能略过（与 <c>/info</c> 同一处理）。
+            var serialNo = _identity.Resolve(snapshot.DeviceId, deviceInfo);
+            if (serialNo.Length == 0)
+            {
+                continue;
+            }
+
+            responses.Add(CreateResponse(snapshot, deviceInfo, serialNo, callbackBaseUrl));
         }
 
         return responses;
@@ -150,6 +168,9 @@ public sealed class DeviceDiscoveryService
     /// <param name="deviceInfo">
     /// 设备静态信息
     /// </param>
+    /// <param name="serialNo">
+    /// 设备身份，见 <see cref="DeviceIdentityService"/>
+    /// </param>
     /// <param name="callbackBaseUrl">
     /// 回呼根地址
     /// </param>
@@ -159,13 +180,16 @@ public sealed class DeviceDiscoveryService
     private static DiscoveryResponse CreateResponse(
         CoreModels.DeviceSnapshot snapshot,
         CoreModels.DeviceInfo deviceInfo,
+        string serialNo,
         string callbackBaseUrl)
     {
         var status = SbiMapping.MapStatus(snapshot);
 
         return new DiscoveryResponse
         {
-            DeviceId = snapshot.DeviceId.ToString(),
+            // 与 /info 报同一个身份：MOSIP 客户端拿 /info 的 deviceId 回到发现响应里逐字段比对
+            // （见 DeviceIdentityService），两边不一致时它会把设备判为"不可用"。
+            DeviceId = serialNo,
             DeviceStatus = status,
             Certification = SbiMapping.MapCertification(deviceInfo.Certification),
 
@@ -175,10 +199,10 @@ public sealed class DeviceDiscoveryService
             CallbackId = callbackBaseUrl,
 
             // 发现端点的数字标识一律未签名（发现发生在信任建立之前）。
-            DigitalId = UnsignedJwt.Encode(SbiDigitalIdFactory.Create(deviceInfo, deviceInfo.SerialNo ?? string.Empty)),
+            DigitalId = UnsignedJwt.Encode(SbiDigitalIdFactory.Create(deviceInfo, serialNo)),
 
-            // 设备连上后才报 SN，故未连接时为空串：线格式要求该字段出现，而空串是有值的。
-            DeviceCode = deviceInfo.SerialNo ?? string.Empty,
+            // 与内层 digitalId 的 serialNo 取同一个值（规范：deviceCode 即 digitalId 里的 serialNo）。
+            DeviceCode = serialNo,
             SpecVersion = [SbiSpec.Version],
 
             // 未注册设备的用途必须是空串：CTK 以 JSON Schema 的 not:{enum:[Auth,Registration]} 校验此字段。

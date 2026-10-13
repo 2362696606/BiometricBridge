@@ -63,6 +63,15 @@ public sealed class RegistrationCaptureService
     private readonly DeviceSignerProvider _signers;
 
     /// <summary>
+    /// 设备身份
+    /// </summary>
+    /// <remarks>
+    /// 请求里的 <c>deviceId</c> 是客户端从设备信息端点抄回来的，那就是本服务持有的身份
+    /// （序列号，见 <see cref="DeviceIdentityService"/>），故按它选设备。
+    /// </remarks>
+    private readonly DeviceIdentityService _identity;
+
+    /// <summary>
     /// 虹膜图像的 JPEG2000 编码器
     /// </summary>
     /// <remarks>
@@ -102,18 +111,21 @@ public sealed class RegistrationCaptureService
         IDeviceInventory inventory,
         IDeviceCapture capture,
         DeviceSignerProvider signers,
+        DeviceIdentityService identity,
         IJpeg2000Encoder jpeg2000,
         MosipOptions options)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(signers);
+        ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(jpeg2000);
         ArgumentNullException.ThrowIfNull(options);
 
         _inventory = inventory;
         _capture = capture;
         _signers = signers;
+        _identity = identity;
         _jpeg2000 = jpeg2000;
 
         // 配置写错时退回规范允许的默认环境，不让一个笔误把端点整个打挂（与 /info 同处理）。
@@ -532,10 +544,11 @@ public sealed class RegistrationCaptureService
     /// 选中的设备；选不出时返回 null
     /// </returns>
     /// <remarks>
-    /// 给了设备 id 就按它精确匹配（发现端点报出的就是 <see cref="CoreModels.DeviceSnapshot.DeviceId"/> 的字符串形态）；
-    /// 没给则退到"唯一那台支持该模态的设备"，多台时宁可不选 —— 采错设备的代价比报错大。
+    /// 给了设备 id 就按它精确匹配 —— 客户端抄回的是设备信息端点报的那个 id，即
+    /// <see cref="DeviceIdentityService"/> 给出的身份（序列号）；没给则退到"唯一那台支持该模态的设备"，
+    /// 多台时宁可不选 —— 采错设备的代价比报错大。
     /// </remarks>
-    private static CoreModels.DeviceSnapshot? ResolveDevice(
+    private CoreModels.DeviceSnapshot? ResolveDevice(
         IReadOnlyList<CoreModels.DeviceSnapshot> snapshots,
         string? deviceId,
         CoreEnums.BiometricModality modality)
@@ -545,7 +558,7 @@ public sealed class RegistrationCaptureService
         if (!string.IsNullOrEmpty(deviceId))
         {
             return usable.FirstOrDefault(snapshot =>
-                string.Equals(snapshot.DeviceId.ToString(), deviceId, StringComparison.OrdinalIgnoreCase));
+                string.Equals(_identity.Resolve(snapshot.DeviceId, snapshot.Info!), deviceId, StringComparison.OrdinalIgnoreCase));
         }
 
         var matching = usable.Where(snapshot => snapshot.Info!.Modality == modality).ToArray();

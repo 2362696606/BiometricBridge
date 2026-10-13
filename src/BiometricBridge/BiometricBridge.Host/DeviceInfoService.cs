@@ -46,25 +46,13 @@ public sealed class DeviceInfoService
     private readonly DeviceEnvironment _env;
 
     /// <summary>
-    /// 各设备最近一次报出的序列号
+    /// 设备身份：报文里的 <c>deviceId</c>／<c>deviceCode</c>／内嵌 <c>serialNo</c> 都取它
     /// </summary>
     /// <remarks>
-    /// <b>只记这一项，其余信息不缓存</b>：设备离了连接，厂商/型号/子类型照样拿得到（都在特性上），
-    /// 唯独序列号是连接期间才由设备报出的。
-    /// <para>
-    /// <b>为什么必须记</b>：CTK 把 <c>deviceInfo</c> 解开后逐项校验，<c>deviceInfoDecoded.deviceId</c>、
-    /// <c>deviceInfoDecoded.deviceCode</c> 以及<b>内层</b> <c>digitalIdDecoded.serialNo</c> 都要求
-    /// <c>non-empty-string</c>；2026-10-09 实测留空被判 <c>must be at least 1 characters long</c>。
-    /// 而"把设备拔掉"恰是造 <c>Not Ready</c> 最常规的做法 —— 不记它，那条路径就报不出合法元素。
-    /// 参考实现同样留了一份 lastKnownInfo。
-    /// </para>
+    /// 由 <see cref="DeviceIdentityService"/> 统一持有，与发现端点共用同一份 —— 两个端点必须报同一个身份，
+    /// 见该类的说明。
     /// </remarks>
-    private readonly Dictionary<Guid, string> _lastKnownSerialNumbers = [];
-
-    /// <summary>
-    /// 保护上面的字典（<c>/info</c> 可以被并发调用）
-    /// </summary>
-    private readonly object _gate = new();
+    private readonly DeviceIdentityService _identity;
 
     #endregion
 
@@ -77,20 +65,29 @@ public sealed class DeviceInfoService
     /// <param name="signers">
     /// 签名器提供者
     /// </param>
+    /// <param name="identity">
+    /// 设备身份（与发现端点共用同一份）
+    /// </param>
     /// <param name="options">
     /// MOSIP 侧设置（取其中的 <c>env</c>）
     /// </param>
     /// <exception cref="ArgumentNullException">
     /// 任一参数为 null
     /// </exception>
-    public DeviceInfoService(IDeviceInventory inventory, DeviceSignerProvider signers, MosipOptions options)
+    public DeviceInfoService(
+        IDeviceInventory inventory,
+        DeviceSignerProvider signers,
+        DeviceIdentityService identity,
+        MosipOptions options)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(signers);
+        ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(options);
 
         _inventory = inventory;
         _signers = signers;
+        _identity = identity;
 
         // 配置里写的是枚举成员名；写错就退回规范允许的默认环境，不让一个笔误把端点整个打挂。
         _env = Enum.TryParse<DeviceEnvironment>(options.Env, ignoreCase: true, out var env)
@@ -164,7 +161,7 @@ public sealed class DeviceInfoService
         string callbackBaseUrl)
     {
         var status = SbiMapping.MapStatus(snapshot);
-        var serialNo = ResolveSerialNo(snapshot.DeviceId, deviceInfo);
+        var serialNo = _identity.Resolve(snapshot.DeviceId, deviceInfo);
 
         // 这台从没报过序列号：拼不出合法的 deviceId/deviceCode/serialNo，只能略过。
         if (serialNo.Length == 0)
@@ -206,35 +203,6 @@ public sealed class DeviceInfoService
             DeviceInfo = signer is null ? UnsignedJwt.Encode(payload) : signer.SignDeviceInfo(payload),
             Error = SbiMapping.ErrorFor(status),
         };
-    }
-
-    /// <summary>
-    /// 取该设备的序列号
-    /// </summary>
-    /// <param name="deviceId">
-    /// 设备 id
-    /// </param>
-    /// <param name="deviceInfo">
-    /// 设备静态信息
-    /// </param>
-    /// <returns>
-    /// 序列号；从没报过则为空串
-    /// </returns>
-    /// <remarks>
-    /// 设备当前报的优先，并顺手记下来；当前报不出（未连接）就用上次见过的。
-    /// </remarks>
-    private string ResolveSerialNo(Guid deviceId, CoreModels.DeviceInfo deviceInfo)
-    {
-        lock (_gate)
-        {
-            if (deviceInfo.SerialNo is { Length: > 0 } current)
-            {
-                _lastKnownSerialNumbers[deviceId] = current;
-                return current;
-            }
-
-            return _lastKnownSerialNumbers.GetValueOrDefault(deviceId, string.Empty);
-        }
     }
 
     /// <summary>
